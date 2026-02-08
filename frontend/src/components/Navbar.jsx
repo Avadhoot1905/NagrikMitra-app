@@ -46,13 +46,17 @@ const Navbar = () => {
               <Link to="/track" className="hover:underline transition">
                 Track
               </Link>
-              <Link to="/history" className="hover:underline transition">
+              {/* <Link to="/history" className="hover:underline transition">
+                History */}
+              <Link to="/#" className="hover:underline transition">
                 History
               </Link>
               <Link to="/profile" className="hover:underline transition">
                 Profile
               </Link>
-              <Link to="/community" className="hover:underline transition">
+              {/* <Link to="/community" className="hover:underline transition">
+                Community */}
+              <Link to="/#" className="hover:underline transition">
                 Community
               </Link>
               <button

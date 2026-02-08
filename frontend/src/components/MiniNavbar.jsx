@@ -46,20 +46,24 @@ const MiniNavbar = () => {
 
         <nav className="hidden md:flex items-center font-bold text-xl lg:text-2xl gap-6">
           {isAuthenticated ? (
-            <>
+             <>
               <Link to="/report" className="hover:underline transition">
                 Report
               </Link>
               <Link to="/track" className="hover:underline transition">
                 Track
               </Link>
-              <Link to="/history" className="hover:underline transition">
+              {/* <Link to="/history" className="hover:underline transition">
+                History */}
+              <Link to="/#" className="hover:underline transition">
                 History
               </Link>
               <Link to="/profile" className="hover:underline transition">
                 Profile
               </Link>
-              <Link to="/community" className="hover:underline transition">
+              {/* <Link to="/community" className="hover:underline transition">
+                Community */}
+              <Link to="/#" className="hover:underline transition">
                 Community
               </Link>
               <button

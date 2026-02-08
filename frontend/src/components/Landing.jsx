@@ -215,7 +215,7 @@ const Landing = () => {
             </p>
           </div>
 
-          <div className="bg-gradient-to-br from-gray-900 to-black p-8 sm:p-10 md:p-12 rounded-2xl border border-white/10 shadow-2xl hover:border-white/20 transition-all duration-300">
+          {/* <div className="bg-gradient-to-br from-gray-900 to-black p-8 sm:p-10 md:p-12 rounded-2xl border border-white/10 shadow-2xl hover:border-white/20 transition-all duration-300">
             <div className="flex items-center gap-4 mb-6">
               <div className="h-12 w-1 bg-blue-500"></div>
               <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold text-white">Why ReportMitra?</h2>
@@ -240,7 +240,7 @@ const Landing = () => {
               ReportMitra exists because Bengaluru deserves a system where every problem is heard, every
               voice matters, and every neighbourhood is valued.
             </p>
-          </div>
+          </div> */}
         </div>
       </section>
 
