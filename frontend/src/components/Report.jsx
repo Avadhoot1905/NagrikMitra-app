@@ -1,8 +1,12 @@
+//Report.jsx - Beautiful UI with Working ML Integration
 import { useState, useEffect } from "react";
 import Navbar from "./MiniNavbar";
 import folder from "../assets/foldericon.png";
 import { useAuth } from "../AuthProvider";
 import Footer from "./Footer";
+import Tick from "../assets/tick.png";
+import Copy from "../assets/copy.jpg";
+import Logo from "../assets/logo-1.png";
 import { classifyImage } from "../ai/classifyImage";
 import { useMap } from "react-leaflet";
 import {
@@ -12,11 +16,8 @@ import {
   MapPin,
   AlertCircle,
   CheckCircle,
-  Calendar,
-  Mail,
-  Phone,
   X,
-  Copy,
+  Copy as CopyIcon,
   ArrowRight,
 } from "lucide-react";
 import "leaflet/dist/leaflet.css";
@@ -36,15 +37,14 @@ function Report() {
   const [showMap, setShowMap] = useState(false);
   const [tempLocation, setTempLocation] = useState(null);
   const [tempPosition, setTempPosition] = useState(null);
-  const [isExtractingLocation, setIsExtractingLocation] = useState(false);
-  const [geotagWarning, setGeotagWarning] = useState("");
   const [copiedId, setCopiedId] = useState(false);
 
   const INDIA_CENTER = [20.5937, 78.9629];
-
   const [mapCenter, setMapCenter] = useState(INDIA_CENTER);
   const [mapZoom, setMapZoom] = useState(5);
 
+  // Add state for ML classification status
+  const [isClassifying, setIsClassifying] = useState(false);
 
   const [formData, setFormData] = useState({
     issue_title: "",
@@ -52,6 +52,7 @@ function Report() {
     issue_description: "",
     image_url: "",
   });
+
   const [errors, setErrors] = useState({
     issue_title: "",
     issue_description: "",
@@ -82,7 +83,7 @@ function Report() {
     if (user) fetchUserProfile();
   }, [user, getAuthHeaders]);
 
-    useEffect(() => {
+  useEffect(() => {
     if (!showMap) return;
 
     if (!navigator.geolocation) {
@@ -95,11 +96,8 @@ function Report() {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude } = pos.coords;
-
         setMapCenter([latitude, longitude]);
-        setMapZoom(18); // ultra zoom
-
-        // Optional: pre-fill marker at user location
+        setMapZoom(18);
         setTempPosition([latitude, longitude]);
       },
       (err) => {
@@ -158,69 +156,130 @@ function Report() {
       throw new Error("S3 upload failed: " + txt);
     }
 
-    const S3_BUCKET =
-      import.meta.env.VITE_S3_BUCKET || "dev-local-assets-temp";
-    const S3_REGION = import.meta.env.VITE_S3_REGION || "ap-south-1";
-
-    const s3ObjectUrl = `https://${S3_BUCKET}.s3.${S3_REGION}.amazonaws.com/${key}`;
-    return s3ObjectUrl;
+    return { key };
   };
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
-    setErrors((prev) => ({ ...prev, [name]: "" }));
+    setFormData((p) => ({ ...p, [name]: value }));
+    setErrors((p) => ({ ...p, [name]: "" }));
   };
 
-  const validateForm = () => {
-    const newErrors = {};
-    let isValid = true;
+  const fileToBase64 = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
 
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setErrors({
+      issue_title: "",
+      issue_description: "",
+      image: "",
+      location: "",
+    });
+
+    if (!userProfile?.is_aadhaar_verified) {
+      setShowUnverifiedPopup(true);
+      return;
+    }
+
+    // Validation
+    let hasError = false;
     if (!formData.issue_title.trim()) {
-      newErrors.issue_title = "Title is required";
-      isValid = false;
+      setErrors((p) => ({ ...p, issue_title: "Issue title is required" }));
+      hasError = true;
     }
-
     if (!formData.issue_description.trim()) {
-      newErrors.issue_description = "Description is required";
-      isValid = false;
+      setErrors((p) => ({
+        ...p,
+        issue_description: "Issue description is required",
+      }));
+      hasError = true;
     }
-
-    if (!selectedFile && !formData.image_url) {
-      newErrors.image = "Image is required";
-      isValid = false;
+    if (!selectedFile) {
+      setErrors((p) => ({ ...p, image: "Issue image is required" }));
+      hasError = true;
     }
-
     if (!formData.location) {
-      newErrors.location = "Location is required";
-      isValid = false;
+      setErrors((p) => ({
+        ...p,
+        location: "Please choose the issue location",
+      }));
+      hasError = true;
     }
-
-    setErrors(newErrors);
-    return isValid;
-  };
-
-  const handleSubmit = async () => {
-    if (!validateForm()) {
-      alert("Please fill in all required fields");
+    if (hasError) {
       return;
     }
 
     setIsSubmitting(true);
 
     try {
-      let s3Url = formData.image_url;
-      if (selectedFile) {
-        s3Url = await uploadFileToS3(selectedFile);
+      if (!user) {
+        alert("Please log in before submitting a report.");
+        setIsSubmitting(false);
+        return;
       }
 
-      const authHeaders = await getAuthHeaders();
+      if (!userProfile) {
+        alert("Profile data is still loading. Please wait and try again.");
+        setIsSubmitting(false);
+        return;
+      }
 
-      const reportPayload = {
+      let imageUrl = formData.image_url || "";
+
+      // Step 1: Upload image to S3
+      if (selectedFile) {
+        try {
+          const { key } = await uploadFileToS3(selectedFile);
+          imageUrl = key;
+
+          if (import.meta.env.DEV) {
+            console.log("Uploaded image URL:", imageUrl);
+          }
+        } catch (uploadErr) {
+          console.error("Image upload error:", uploadErr);
+          alert("Failed to upload image. Please try again.");
+          setIsSubmitting(false);
+          return;
+        }
+      }
+
+      // Step 2: Classify image using ML model
+      let department = "Manual";
+      if (selectedFile) {
+        try {
+          setIsClassifying(true);
+          const base64 = await fileToBase64(selectedFile);
+          department = await classifyImage(base64, getAuthHeaders);
+          if (import.meta.env.DEV) {
+            console.log("AI Department:", department);
+          }
+          setIsClassifying(false);
+        } catch (err) {
+          console.error("Classification failed:", err);
+          setIsClassifying(false);
+        }
+      }
+
+      // Step 3: Submit report
+      const headers =
+        typeof getAuthHeaders === "function"
+          ? await getAuthHeaders()
+          : { "Content-Type": "application/json" };
+
+      const payload = {
         issue_title: formData.issue_title,
-        issue_description: formData.issue_description,
         location: formData.location,
-        image_url: s3Url,
+        issue_description: formData.issue_description,
+        image_url: imageUrl,
+        department: department,
+        status: "pending",
       };
 
       const response = await fetch(getApiUrl("/reports/"), {
@@ -272,6 +331,7 @@ function Report() {
       }
     } finally {
       setIsSubmitting(false);
+      setIsClassifying(false);
     }
   };
 
@@ -283,9 +343,11 @@ function Report() {
   };
 
   const copyToClipboard = () => {
-    navigator.clipboard.writeText(applicationId);
-    setCopiedId(true);
-    setTimeout(() => setCopiedId(false), 2000);
+    if (applicationId) {
+      navigator.clipboard.writeText(applicationId);
+      setCopiedId(true);
+      setTimeout(() => setCopiedId(false), 2000);
+    }
   };
 
   const aadhaar = userProfile?.aadhaar || null;
@@ -319,11 +381,15 @@ function Report() {
     lastNameDisplay = lastName || "Not provided";
   }
 
-  const markerIcon = new L.Icon({
-    iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-    shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+  const blueIcon = new L.Icon({
+    iconUrl:
+      "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png",
+    shadowUrl:
+      "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png",
     iconSize: [25, 41],
     iconAnchor: [12, 41],
+    popupAnchor: [1, -34],
+    shadowSize: [41, 41],
   });
 
   function LocationPicker({ onSelect, position }) {
@@ -334,171 +400,145 @@ function Report() {
       },
     });
 
-    return position ? <Marker position={position} icon={markerIcon} /> : null;
+    return position ? <Marker position={position} icon={blueIcon} /> : null;
   }
 
-function RecenterMap({ center, zoom }) {
-  const map = useMap();
+  function RecenterMap({ center, zoom }) {
+    const map = useMap();
 
-  useEffect(() => {
-    map.setView(center, zoom, { animate: true });
-  }, [center, zoom]);
+    useEffect(() => {
+      map.setView(center, zoom, { animate: true });
+    }, [center, zoom]);
 
-  return null;
-}
-
-  const userFields = [
-    {
-      label: "Full Name",
-      value:
-        userProfile?.aadhaar?.full_name ||
-        `${userProfile?.aadhaar?.first_name || ""} ${
-          userProfile?.aadhaar?.last_name || ""
-        }`.trim() ||
-        "Not available",
-      icon: User,
-    },
-    {
-      label: "Email",
-      value: userProfile?.email || "Not available",
-      icon: Mail,
-    },
-    {
-      label: "Phone",
-      value: userProfile?.aadhaar?.phone_number || "Not available",
-      icon: Phone,
-    },
-  ];
+    return null;
+  }
 
   return (
-    <div className="min-h-screen flex flex-col bg-white">
+    <div className="min-h-screen flex flex-col bg-gradient-to-br from-emerald-50 via-white to-green-50">
       <Navbar />
 
-      {/* Unverified Popup */}
-      {showUnverifiedPopup && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 relative">
-            <button
-              onClick={() => setShowUnverifiedPopup(false)}
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition"
-            >
-              <X className="w-6 h-6" />
-            </button>
-
-            <div className="flex flex-col items-center text-center">
-              <div className="w-20 h-20 bg-orange-100 rounded-full flex items-center justify-center mb-6">
-                <AlertCircle className="w-10 h-10 text-orange-600" />
+      {/* Success Popup */}
+      {showSuccessPopup && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 transform transition-all">
+            <div className="flex justify-center mb-6">
+              <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center">
+                <CheckCircle className="w-12 h-12 text-emerald-600" />
               </div>
-              
-              <h2 className="text-2xl font-black text-gray-900 mb-3">
-                Aadhaar Verification Required
-              </h2>
-              
-              <p className="text-gray-600 mb-6 leading-relaxed">
-                To ensure authenticity and prevent misuse, all users must complete
-                Aadhaar verification before submitting reports.
-              </p>
+            </div>
 
+            <h2 className="text-2xl font-bold text-center text-gray-900 mb-2">
+              Report Submitted Successfully!
+            </h2>
+            <p className="text-gray-600 text-center mb-6">
+              Your issue has been registered and will be reviewed shortly.
+            </p>
+
+            <div className="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-4 mb-6">
+              <p className="text-sm text-gray-700 mb-2 font-medium">
+                Your Tracking ID:
+              </p>
+              <div className="flex items-center justify-between bg-white rounded-lg p-3 border border-emerald-300">
+                <span className="font-mono font-bold text-emerald-600 text-lg">
+                  {applicationId}
+                </span>
+                <button
+                  onClick={copyToClipboard}
+                  className="p-2 hover:bg-emerald-50 rounded-lg transition-colors"
+                  title="Copy to clipboard"
+                >
+                  {copiedId ? (
+                    <CheckCircle className="w-5 h-5 text-emerald-600" />
+                  ) : (
+                    <CopyIcon className="w-5 h-5 text-gray-600" />
+                  )}
+                </button>
+              </div>
+              <p className="text-xs text-gray-600 mt-2 text-center">
+                Save this ID to track your report status
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-3">
               <button
-                onClick={() => (window.location.href = "/profile")}
-                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-3.5 rounded-lg font-bold transition-all duration-300 shadow-md hover:shadow-lg flex items-center justify-center gap-2"
+                onClick={closePopup}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-3 rounded-lg font-semibold transition-all"
               >
-                Go to Profile
-                <ArrowRight className="w-5 h-5" />
+                Continue
+              </button>
+              <button
+                onClick={() => {
+                  closePopup();
+                  window.location.href = `/track`;
+                }}
+                className="text-emerald-600 hover:text-emerald-700 underline font-bold"
+              >
+                Track this report
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Success Popup */}
-      {showSuccessPopup && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 relative">
+      {/* Unverified Popup */}
+      {showUnverifiedPopup && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8">
+            <div className="flex justify-center mb-6">
+              <div className="w-20 h-20 bg-orange-100 rounded-full flex items-center justify-center">
+                <AlertCircle className="w-12 h-12 text-orange-600" />
+              </div>
+            </div>
+
+            <h2 className="text-2xl font-bold text-center text-gray-900 mb-2">
+              Aadhaar Verification Required
+            </h2>
+            <p className="text-gray-600 text-center mb-6">
+              You must verify your Aadhaar before submitting reports. Please complete verification in your profile settings.
+            </p>
+
             <button
-              onClick={() => {
-                setShowSuccessPopup(false);
-                setApplicationId(null);
-              }}
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition"
+              onClick={() => (window.location.href = "/profile")}
+              className="w-full bg-orange-600 hover:bg-orange-700 text-white py-3 rounded-lg font-semibold transition-all mb-3"
             >
-              <X className="w-6 h-6" />
+              Verify Now
             </button>
-
-            <div className="flex flex-col items-center text-center">
-              <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mb-6">
-                <CheckCircle className="w-10 h-10 text-emerald-600" />
-              </div>
-              
-              <h2 className="text-2xl font-black text-gray-900 mb-3">
-                Report Submitted Successfully!
-              </h2>
-              
-              <p className="text-gray-600 mb-6 leading-relaxed">
-                Your complaint has been registered. Use the tracking ID below to
-                monitor your report's progress.
-              </p>
-
-              <div className="w-full bg-emerald-50 border-2 border-emerald-200 rounded-xl p-4 mb-6">
-                <p className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-2">
-                  Tracking ID
-                </p>
-                <div className="flex items-center justify-between gap-2">
-                  <code className="text-xl font-mono font-bold text-emerald-900">
-                    {applicationId}
-                  </code>
-                  <button
-                    onClick={() => copyToClipboard(applicationId)}
-                    className="p-2 hover:bg-emerald-100 rounded-lg transition"
-                    title="Copy to clipboard"
-                  >
-                    {copiedId ? (
-                      <CheckCircle className="w-5 h-5 text-emerald-600" />
-                    ) : (
-                      <Copy className="w-5 h-5 text-emerald-600" />
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-              <button
-                onClick={() => (window.location.href = "/track")}
-                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-3.5 rounded-lg font-bold transition-all duration-300 shadow-md hover:shadow-lg flex items-center justify-center gap-2"
-              >
-                Track Report
-                <ArrowRight className="w-5 h-5" />
-              </button>
-            </div>
+            <button
+              onClick={() => setShowUnverifiedPopup(false)}
+              className="w-full bg-gray-200 hover:bg-gray-300 text-gray-700 py-3 rounded-lg font-semibold transition-all"
+            >
+              Close
+            </button>
           </div>
+        </div>
       )}
 
       {/* Map Modal */}
       {showMap && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[80vh] overflow-hidden flex flex-col">
-            <div className="flex items-center justify-between p-6 border-b border-gray-200">
-              <h3 className="text-2xl font-black text-gray-900">
-                Select Issue Location
-              </h3>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden">
+            <div className="bg-emerald-600 px-6 py-4 flex items-center justify-between">
+              <h3 className="text-xl font-bold text-white">Select Issue Location</h3>
               <button
-                onClick={() => setShowMap(false)}
-                className="text-gray-400 hover:text-gray-600 transition"
+                onClick={() => {
+                  setTempLocation(null);
+                  setTempPosition(null);
+                  setShowMap(false);
+                }}
+                className="text-white hover:bg-emerald-700 p-2 rounded-lg transition-colors"
               >
                 <X className="w-6 h-6" />
               </button>
             </div>
-            
-            <div className="flex-1 relative">
+
+            <div style={{ height: "500px", width: "100%" }}>
               <MapContainer
-                center={tempPosition || [12.9716, 77.5946]}
-                zoom={13}
+                center={mapCenter}
+                zoom={mapZoom}
                 style={{ height: "100%", width: "100%" }}
               >
                 <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-
                 <RecenterMap center={mapCenter} zoom={mapZoom} />
-
                 <LocationPicker
                   position={tempPosition}
                   onSelect={async (lat, lng) => {
@@ -519,40 +559,38 @@ function RecenterMap({ center, zoom }) {
               </MapContainer>
             </div>
 
-            <div className="p-6 border-t border-gray-200">
-              <div className="mb-4">
-                <p className="text-sm font-semibold text-gray-700 mb-2">
-                  Selected Location:
-                </p>
-                <p className="text-sm text-gray-900 bg-gray-50 p-3 rounded-lg">
-                  {tempLocation || "Click on the map to select a location"}
-                </p>
-              </div>
+            <div className="p-6 bg-gray-50">
+              {tempLocation && (
+                <div className="mb-4 p-4 bg-white rounded-lg border-2 border-emerald-200">
+                  <p className="text-sm font-semibold text-gray-700 mb-1">Selected Location:</p>
+                  <p className="text-gray-900">{tempLocation}</p>
+                </div>
+              )}
+
               <div className="flex gap-3">
+                {tempLocation && (
+                  <button
+                    onClick={() => {
+                      setFormData((p) => ({ ...p, location: tempLocation }));
+                      setErrors((p) => ({ ...p, location: "" }));
+                      setTempLocation(null);
+                      setTempPosition(null);
+                      setShowMap(false);
+                    }}
+                    className="flex-1 bg-emerald-600 text-white py-3 rounded-lg font-bold hover:bg-emerald-700 transition"
+                  >
+                    Confirm Location
+                  </button>
+                )}
                 <button
                   onClick={() => {
-                    setShowMap(false);
-                    setTempPosition(null);
                     setTempLocation(null);
+                    setTempPosition(null);
+                    setShowMap(false);
                   }}
-                  className="flex-1 px-4 py-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg font-semibold transition-all"
+                  className="flex-1 bg-gray-200 text-gray-700 py-3 rounded-lg font-bold hover:bg-gray-300 transition"
                 >
                   Cancel
-                </button>
-                <button
-                  onClick={() => {
-                    if (tempLocation) {
-                      setFormData((p) => ({ ...p, location: tempLocation }));
-                      setShowMap(false);
-                      setErrors((p) => ({ ...p, location: "" }));
-                    } else {
-                      alert("Please select a location on the map");
-                    }
-                  }}
-                  disabled={!tempLocation}
-                  className="flex-1 px-4 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg font-semibold transition-all"
-                >
-                  Confirm Location
                 </button>
               </div>
             </div>
@@ -560,80 +598,83 @@ function RecenterMap({ center, zoom }) {
         </div>
       )}
 
-      <main className="flex-grow bg-gradient-to-b from-emerald-50 to-white py-12">
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8 max-w-6xl">
-          <div className="bg-white rounded-2xl shadow-lg p-6 md:p-10">
-            {/* Header */}
-            <div className="text-center mb-8">
-              <h1 className="text-4xl md:text-5xl font-black text-gray-900 mb-3">
-                Report an Issue
-              </h1>
-              <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-                Help us improve your community by reporting civic issues. Fill in the
-                details below to submit your complaint.
-              </p>
-            </div>
+      <main className="flex-grow flex justify-center py-12 px-4">
+        <div className="bg-white w-full max-w-6xl rounded-2xl shadow-xl border border-gray-200 p-8">
+          <div className="text-center mb-8">
+            <h1 className="text-4xl font-extrabold text-gray-900 mb-2">
+              Report a Civic Issue
+            </h1>
+            <p className="text-gray-600">
+              Help improve your community by reporting issues that need attention
+            </p>
+          </div>
 
-            <div className="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-4 mb-8 flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
-              <p className="text-sm text-emerald-800">
-                <strong>Note:</strong> Please ensure that the uploaded image is
-                geotagged (contains location data). If your image doesn't have GPS
-                data, you can manually select the location on the map.
-              </p>
-            </div>
-
-            <hr className="my-8 border-gray-200" />
-
-            {/* User Info */}
-            <div className="mb-8">
-              <div className="flex items-center gap-2 mb-4">
-                <User className="w-6 h-6 text-emerald-600" />
+          <div className="space-y-8">
+            {/* Citizen Details */}
+            <div>
+              <div className="flex items-center gap-3 mb-4 pb-3 border-b-2 border-emerald-100">
+                <div className="w-10 h-10 bg-emerald-100 rounded-lg flex items-center justify-center">
+                  <User className="w-5 h-5 text-emerald-600" />
+                </div>
                 <h2 className="text-2xl font-bold text-gray-900">
-                  Your Information
+                  Citizen Details
                 </h2>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {userFields.map((field, idx) => {
-                  const Icon = field.icon;
-                  return (
-                    <div key={idx} className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                      <div className="flex items-center gap-2 mb-2">
-                        <Icon className="w-4 h-4 text-gray-500" />
-                        <label className="text-sm font-semibold text-gray-700">
-                          {field.label}
-                        </label>
-                      </div>
-                      <p className="text-gray-900 font-medium">{field.value}</p>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mt-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <Calendar className="w-4 h-4 text-gray-500" />
-                  <label className="text-sm font-semibold text-gray-700">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    First Name
+                  </label>
+                  <input
+                    type="text"
+                    readOnly
+                    value={firstNameDisplay}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-300 text-gray-700 rounded-lg cursor-not-allowed"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Middle Name
+                  </label>
+                  <input
+                    type="text"
+                    readOnly
+                    value={middleNameDisplay}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-300 text-gray-700 rounded-lg cursor-not-allowed"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Last Name
+                  </label>
+                  <input
+                    type="text"
+                    readOnly
+                    value={lastNameDisplay}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-300 text-gray-700 rounded-lg cursor-not-allowed"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
                     Issue Date
                   </label>
+                  <input
+                    type="date"
+                    readOnly
+                    value={getCurrentDate()}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-300 text-gray-700 rounded-lg cursor-not-allowed"
+                  />
                 </div>
-                <p className="text-gray-900 font-medium">
-                  {new Date(getCurrentDate()).toLocaleDateString("en-IN", {
-                    day: "2-digit",
-                    month: "long",
-                    year: "numeric",
-                  })}
-                </p>
               </div>
             </div>
 
-            <hr className="my-8 border-gray-200" />
-
             {/* Issue Details */}
-            <div className="mb-8">
-              <div className="flex items-center gap-2 mb-6">
-                <FileText className="w-6 h-6 text-emerald-600" />
+            <div>
+              <div className="flex items-center gap-3 mb-4 pb-3 border-b-2 border-emerald-100">
+                <div className="w-10 h-10 bg-emerald-100 rounded-lg flex items-center justify-center">
+                  <FileText className="w-5 h-5 text-emerald-600" />
+                </div>
                 <h2 className="text-2xl font-bold text-gray-900">
                   Issue Details
                 </h2>
@@ -702,11 +743,6 @@ function RecenterMap({ center, zoom }) {
                     <label className="block text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
                       <MapPin className="w-4 h-4 text-emerald-600" />
                       Issue Location <span className="text-red-500">*</span>
-                      {formData.location && !geotagWarning && (
-                        <span className="text-xs font-normal text-emerald-600 ml-2">
-                          ✓ Auto-detected from image
-                        </span>
-                      )}
                     </label>
                     <div className="flex gap-2">
                       <input
@@ -715,7 +751,7 @@ function RecenterMap({ center, zoom }) {
                         value={formData.location}
                         readOnly
                         required
-                        placeholder="Auto-detected from geotagged image or manually selected"
+                        placeholder="Select location from map"
                         className="flex-1 px-4 py-3 bg-gray-50 border border-gray-300 text-gray-700 rounded-lg cursor-not-allowed"
                       />
                       <button
@@ -740,22 +776,7 @@ function RecenterMap({ center, zoom }) {
                     <label className="text-sm font-semibold text-gray-900">
                       Issue Image <span className="text-red-500">*</span>
                     </label>
-                    {isExtractingLocation && (
-                      <span className="text-xs text-emerald-600 font-semibold animate-pulse flex items-center gap-1">
-                        <MapPin className="w-3 h-3" />
-                        Extracting GPS...
-                      </span>
-                    )}
                   </div>
-
-                  <a
-                    href="https://www.precisely.com/glossary/geotagging/"
-                    className="text-xs text-emerald-700 hover:text-emerald-800 underline mb-4 inline-block"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    What is geotagging?
-                  </a>
 
                   <div className="flex-1 border-2 border-dashed border-emerald-300 rounded-xl bg-white min-h-[280px] flex items-center justify-center overflow-hidden">
                     {preview ? (
@@ -797,17 +818,6 @@ function RecenterMap({ center, zoom }) {
                       </p>
                     )}
 
-                    {geotagWarning && (
-                      <div className="bg-orange-50 border border-orange-300 rounded-lg p-3">
-                        <p className="text-xs text-orange-700 font-medium">
-                          {geotagWarning}
-                        </p>
-                        <p className="text-xs text-orange-600 mt-1">
-                          💡 Tip: Use your phone's camera with location enabled
-                        </p>
-                      </div>
-                    )}
-
                     {errors.image && (
                       <p className="text-xs text-red-600 font-semibold text-center">
                         {errors.image}
@@ -824,13 +834,13 @@ function RecenterMap({ center, zoom }) {
             <div className="flex justify-center">
               <button
                 onClick={handleSubmit}
-                disabled={isSubmitting}
+                disabled={isSubmitting || isClassifying}
                 className="group bg-emerald-600 hover:bg-emerald-700 text-white px-10 py-4 rounded-lg font-bold text-lg transition-all duration-300 shadow-lg hover:shadow-xl hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 flex items-center gap-3"
               >
                 {isSubmitting ? (
                   <>
                     <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                    Submitting Report...
+                    {isClassifying ? "Analyzing image..." : "Submitting Report..."}
                   </>
                 ) : (
                   <>
