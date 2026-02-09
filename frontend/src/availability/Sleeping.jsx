@@ -39,12 +39,12 @@ export default function Sleeping({ onRetry }) {
         `}
       </style>
 
-      <div className="h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 via-white to-green-50 p-4 md:p-6 lg:p-8 relative overflow-hidden">
+      <div className="min-h-screen lg:h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 via-white to-green-50 p-4 md:p-6 lg:p-8 relative overflow-hidden">
         {/* Decorative background elements */}
         <div className="absolute top-0 right-0 w-96 h-96 bg-emerald-100 rounded-full blur-3xl opacity-30"></div>
         <div className="absolute bottom-0 left-0 w-96 h-96 bg-green-100 rounded-full blur-3xl opacity-30"></div>
 
-        <div className="relative z-10 w-full max-w-6xl mx-auto h-full max-h-[90vh] flex items-center">
+        <div className="relative z-10 w-full max-w-6xl mx-auto lg:h-full lg:max-h-[90vh] flex items-center py-8 lg:py-0">
           <div className="grid lg:grid-cols-2 gap-8 lg:gap-12 items-center w-full">
             
             {/* Left side - Illustration */}
@@ -55,13 +55,13 @@ export default function Sleeping({ onRetry }) {
               <img 
                 src={ServerImage}
                 alt="Server maintenance" 
-                className="w-full max-w-lg drop-shadow-2xl"
+                className="w-full max-w-sm lg:max-w-lg drop-shadow-2xl"
                 style={{ animation: "float 3s ease-in-out infinite" }}
               />
             </div>
 
             {/* Right side - Content */}
-            <div className="flex flex-col justify-center space-y-6 text-center lg:text-left">
+            <div className="flex flex-col justify-center space-y-5 lg:space-y-6 text-center lg:text-left">
               {/* Badge */}
               <div 
                 className="inline-flex items-center gap-2 bg-emerald-100 text-emerald-700 px-4 py-2 rounded-full text-sm font-semibold self-center lg:self-start"
@@ -73,7 +73,7 @@ export default function Sleeping({ onRetry }) {
 
               {/* Title */}
               <h1 
-                className="text-4xl md:text-5xl xl:text-6xl font-black text-gray-900 leading-tight"
+                className="text-4xl md:text-5xl lg:text-5xl xl:text-6xl font-black text-gray-900 leading-tight"
                 style={{ animation: "fadeUp 0.8s ease-out both" }}
               >
                 We'll Be Right Back
