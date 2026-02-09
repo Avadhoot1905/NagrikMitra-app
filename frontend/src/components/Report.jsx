@@ -4,6 +4,7 @@ import folder from "../assets/foldericon.png";
 import { useAuth } from "../AuthProvider";
 import Footer from "./Footer";
 import { classifyImage } from "../ai/classifyImage";
+import { useMap } from "react-leaflet";
 import {
   User,
   FileText,
@@ -22,7 +23,6 @@ import "leaflet/dist/leaflet.css";
 import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import { getApiUrl } from "../utils/api";
-import EXIF from "exif-js";
 
 function Report() {
   const [preview, setPreview] = useState(null);
@@ -36,9 +36,12 @@ function Report() {
   const [showMap, setShowMap] = useState(false);
   const [tempLocation, setTempLocation] = useState(null);
   const [tempPosition, setTempPosition] = useState(null);
-  const [isExtractingLocation, setIsExtractingLocation] = useState(false);
-  const [geotagWarning, setGeotagWarning] = useState("");
-  const [copiedId, setCopiedId] = useState(false);
+
+  const INDIA_CENTER = [20.5937, 78.9629];
+
+const [mapCenter, setMapCenter] = useState(INDIA_CENTER);
+const [mapZoom, setMapZoom] = useState(5);
+
 
   const [formData, setFormData] = useState({
     issue_title: "",
@@ -76,127 +79,53 @@ function Report() {
     if (user) fetchUserProfile();
   }, [user, getAuthHeaders]);
 
-  // Convert GPS coordinates from EXIF format to decimal
-  const convertDMSToDD = (degrees, minutes, seconds, direction) => {
-    let dd = degrees + minutes / 60 + seconds / 3600;
-    if (direction === "S" || direction === "W") {
-      dd = dd * -1;
+    useEffect(() => {
+    if (!showMap) return;
+
+    if (!navigator.geolocation) {
+      console.warn("Geolocation not supported");
+      setMapCenter(INDIA_CENTER);
+      setMapZoom(5);
+      return;
     }
-    return dd;
-  };
 
-  // Extract geolocation from image EXIF data
-  const extractGeolocation = (file) => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      
-      reader.onload = function (e) {
-        const image = new Image();
-        image.src = e.target.result;
-        
-        image.onload = function () {
-          EXIF.getData(image, function () {
-            const allTags = EXIF.getAllTags(this);
-            console.log("All EXIF tags:", allTags);
-            
-            const lat = EXIF.getTag(this, "GPSLatitude");
-            const latRef = EXIF.getTag(this, "GPSLatitudeRef");
-            const lon = EXIF.getTag(this, "GPSLongitude");
-            const lonRef = EXIF.getTag(this, "GPSLongitudeRef");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude } = pos.coords;
 
-            console.log("GPS Data:", { lat, latRef, lon, lonRef });
+        setMapCenter([latitude, longitude]);
+        setMapZoom(18); // ultra zoom
 
-            if (lat && lon && latRef && lonRef) {
-              const latitude = convertDMSToDD(lat[0], lat[1], lat[2], latRef);
-              const longitude = convertDMSToDD(lon[0], lon[1], lon[2], lonRef);
-              
-              console.log("Converted coordinates:", { latitude, longitude });
-              resolve({ latitude, longitude });
-            } else {
-              reject(new Error("No GPS data found in image"));
-            }
-          });
-        };
-        
-        image.onerror = function () {
-          reject(new Error("Failed to load image"));
-        };
-      };
-      
-      reader.onerror = function () {
-        reject(new Error("Failed to read file"));
-      };
-      
-      reader.readAsDataURL(file);
-    });
-  };
-
-  // Reverse geocode using Nominatim (OpenStreetMap)
-  const reverseGeocode = async (latitude, longitude) => {
-    try {
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&accept-language=en`,
-        {
-          headers: {
-            "User-Agent": "ReportMitra/1.0 (contact@reportmitra.in)",
-          },
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error("Reverse geocoding failed");
+        // Optional: pre-fill marker at user location
+        setTempPosition([latitude, longitude]);
+      },
+      (err) => {
+        console.warn("Location permission denied", err);
+        setMapCenter(INDIA_CENTER);
+        setMapZoom(5);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0,
       }
+    );
+  }, [showMap]);
 
-      const data = await response.json();
-      return data.display_name || `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-    } catch (error) {
-      console.error("Reverse geocoding error:", error);
-      return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-    }
-  };
-
-  const handleFileChange = async (e) => {
+  const handleFileChange = (e) => {
     const file = e.target.files && e.target.files[0];
     if (file) {
       setSelectedFile(file);
       setPreview(URL.createObjectURL(file));
       setFormData((p) => ({ ...p, image_url: "" }));
       setErrors((p) => ({ ...p, image: "" }));
-      setGeotagWarning("");
-
-      // Extract geolocation from image
-      setIsExtractingLocation(true);
-      try {
-        const { latitude, longitude } = await extractGeolocation(file);
-        
-        console.log("Successfully extracted GPS:", { latitude, longitude });
-        
-        // Get human-readable address
-        const address = await reverseGeocode(latitude, longitude);
-        
-        console.log("Geocoded address:", address);
-        
-        // Update form data and map position
-        setFormData((p) => ({ ...p, location: address }));
-        setTempPosition([latitude, longitude]);
-        setTempLocation(address);
-        
-        setGeotagWarning("");
-      } catch (error) {
-        console.error("Geolocation extraction error:", error);
-        setGeotagWarning("⚠️ No GPS data found in image. Please use the map to select location.");
-        setFormData((p) => ({ ...p, location: "" }));
-      } finally {
-        setIsExtractingLocation(false);
-      }
     } else {
       if (preview) {
         URL.revokeObjectURL(preview);
       }
       setSelectedFile(null);
       setPreview(null);
-      setFormData((p) => ({ ...p, image_url: "", location: "" }));
-      setGeotagWarning("");
+      setFormData((p) => ({ ...p, image_url: "" }));
     }
   };
 
@@ -293,109 +222,126 @@ function Report() {
 
       const response = await fetch(getApiUrl("/reports/"), {
         method: "POST",
-        headers: {
-          ...authHeaders,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(reportPayload),
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        setApplicationId(data.tracking_id);
-        setShowSuccessPopup(true);
-        setFormData({
-          issue_title: "",
-          location: "",
-          issue_description: "",
-          image_url: "",
-        });
-        setSelectedFile(null);
-        setPreview(null);
-      } else {
-        const errorData = await response.json();
-        console.error("Error submitting report:", errorData);
-        alert(`Error: ${errorData.detail || "Failed to submit report"}`);
+      if (!response.ok) {
+        let errDetail = "Failed to submit report";
+        try {
+          const errJson = await response.json();
+          errDetail = errJson.detail || JSON.stringify(errJson);
+        } catch {
+          const errText = await response.text().catch(() => null);
+          if (errText) errDetail = errText;
+        }
+        throw new Error(errDetail);
       }
-    } catch (error) {
-      console.error("Error submitting report:", error);
-      alert("An error occurred while submitting the report.");
+
+      const result = await response.json();
+      if (import.meta.env.DEV) {
+        console.log("Report submit result:", result);
+      }
+      setApplicationId(result.tracking_id);
+      setShowSuccessPopup(true);
+
+      setFormData({
+        issue_title: "",
+        location: "",
+        issue_description: "",
+        image_url: "",
+        department: "",
+      });
+      setSelectedFile(null);
+      setPreview(null);
+      const fileInput = document.getElementById("fileInput");
+      if (fileInput) fileInput.value = "";
+    } catch (err) {
+      console.error("Submit error:", err);
+      if (err.message?.includes("issue_title")) {
+        setErrors((p) => ({ ...p, issue_title: "Issue title is required" }));
+      }
+      if (err.message?.includes("issue_description")) {
+        setErrors((p) => ({
+          ...p,
+          issue_description: "Issue description is required",
+        }));
+      }
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const getCurrentDate = () => {
-    const today = new Date();
-    const yyyy = today.getFullYear();
-    const mm = String(today.getMonth() + 1).padStart(2, "0");
-    const dd = String(today.getDate()).padStart(2, "0");
-    return `${yyyy}-${mm}-${dd}`;
+  const getCurrentDate = () => new Date().toISOString().split("T")[0];
+
+  const closePopup = () => {
+    setShowSuccessPopup(false);
+    setApplicationId(null);
   };
 
-  const customMarkerIcon = L.icon({
-    iconUrl:
-      "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png",
-    shadowUrl:
-      "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png",
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(applicationId);
+    alert("Application ID copied to clipboard!");
+  };
+
+  const aadhaar = userProfile?.aadhaar || null;
+  let firstNameDisplay = "Not provided";
+  let middleNameDisplay = "N/A";
+  let lastNameDisplay = "Not provided";
+
+  if (!userProfile) {
+    firstNameDisplay = middleNameDisplay = lastNameDisplay = "Loading...";
+  } else if (aadhaar) {
+    let firstName = aadhaar.first_name || "";
+    let middleName = aadhaar.middle_name || "";
+    let lastName = aadhaar.last_name || "";
+
+    if ((!firstName || !lastName) && aadhaar.full_name) {
+      const parts = aadhaar.full_name.trim().split(/\s+/);
+      if (parts.length === 1) {
+        firstName = firstName || parts[0];
+      } else if (parts.length === 2) {
+        firstName = firstName || parts[0];
+        lastName = lastName || parts[1];
+      } else if (parts.length >= 3) {
+        firstName = firstName || parts[0];
+        lastName = lastName || parts[parts.length - 1];
+        middleName = middleName || parts.slice(1, -1).join(" ");
+      }
+    }
+
+    firstNameDisplay = firstName || "Not provided";
+    middleNameDisplay = middleName || "N/A";
+    lastNameDisplay = lastName || "Not provided";
+  }
+
+  const markerIcon = new L.Icon({
+    iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+    shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
     iconSize: [25, 41],
     iconAnchor: [12, 41],
-    popupAnchor: [1, -34],
-    shadowSize: [41, 41],
   });
 
-  function LocationMarker({ onConfirm }) {
-    const [position, setPosition] = useState(tempPosition || [12.9716, 77.5946]);
-
-    const map = useMapEvents({
-      click(e) {
-        setPosition([e.latlng.lat, e.latlng.lng]);
-        setTempPosition([e.latlng.lat, e.latlng.lng]);
-        setTempLocation(null);
+  function LocationPicker({ onSelect, position }) {
+    useMapEvents({
+      click: async (e) => {
+        const { lat, lng } = e.latlng;
+        onSelect(lat, lng);
       },
     });
 
-    useEffect(() => {
-      if (position) {
-        map.flyTo(position, 13);
-      }
-    }, [position, map]);
-
-    const handleConfirmClick = async () => {
-      if (position) {
-        const [lat, lng] = position;
-        const address = await reverseGeocode(lat, lng);
-        setTempLocation(address);
-        onConfirm(address, position);
-      }
-    };
-
-    return (
-      <>
-        {position && <Marker position={position} icon={customMarkerIcon} />}
-        <div className="leaflet-top leaflet-right" style={{ zIndex: 1000 }}>
-          <div className="leaflet-control leaflet-bar">
-            <button
-              onClick={handleConfirmClick}
-              className="bg-emerald-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-emerald-700 transition shadow-lg"
-              style={{
-                border: "none",
-                cursor: "pointer",
-              }}
-            >
-              Confirm Location
-            </button>
-          </div>
-        </div>
-      </>
-    );
+    return position ? <Marker position={position} icon={markerIcon} /> : null;
   }
 
-  const copyToClipboard = async (text) => {
-    await navigator.clipboard.writeText(text);
-    setCopiedId(true);
-    setTimeout(() => setCopiedId(false), 2000);
-  };
+function RecenterMap({ center, zoom }) {
+  const map = useMap();
+
+  useEffect(() => {
+    map.setView(center, zoom, { animate: true });
+  }, [center, zoom]);
+
+  return null;
+}
 
   const userFields = [
     {
@@ -510,6 +456,7 @@ function Report() {
                   </button>
                 </div>
               </div>
+            </div>
 
               <button
                 onClick={() => (window.location.href = "/track")}
@@ -545,9 +492,26 @@ function Report() {
                 zoom={13}
                 style={{ height: "100%", width: "100%" }}
               >
-                <TileLayer
-                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+
+                <RecenterMap center={mapCenter} zoom={mapZoom} />
+
+                <LocationPicker
+                  position={tempPosition}
+                  onSelect={async (lat, lng) => {
+                    setTempPosition([lat, lng]);
+
+                    try {
+                      const res = await fetch(
+                        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&accept-language=en`,
+                        { headers: { "User-Agent": "ReportMitra/1.0" } }
+                      );
+                      const data = await res.json();
+                      setTempLocation(data.display_name || `${lat}, ${lng}`);
+                    } catch {
+                      setTempLocation(`${lat}, ${lng}`);
+                    }
+                  }}
                 />
                 <LocationMarker
                   onConfirm={(address, pos) => {
