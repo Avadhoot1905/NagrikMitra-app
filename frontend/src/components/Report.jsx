@@ -1,6 +1,4 @@
-// frontend/src/components/Report.jsx
-// Updated version with ML model integration
-
+//old report.jsx with ML integration (keeping original UI)
 import { useState, useEffect } from "react";
 import Navbar from "./MiniNavbar";
 import folder from "../assets/foldericon.png";
@@ -16,6 +14,7 @@ import {
   FileText,
   Image as ImageIcon,
   MapPin,
+  AlertCircle,
 } from "lucide-react";
 import "leaflet/dist/leaflet.css";
 import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
@@ -36,6 +35,7 @@ function Report() {
   const [tempPosition, setTempPosition] = useState(null);
 
   const INDIA_CENTER = [20.5937, 78.9629];
+
   const [mapCenter, setMapCenter] = useState(INDIA_CENTER);
   const [mapZoom, setMapZoom] = useState(5);
 
@@ -48,7 +48,6 @@ function Report() {
     issue_description: "",
     image_url: "",
   });
-  
   const [errors, setErrors] = useState({
     issue_title: "",
     issue_description: "",
@@ -92,8 +91,11 @@ function Report() {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude } = pos.coords;
+
         setMapCenter([latitude, longitude]);
-        setMapZoom(18);
+        setMapZoom(18); // ultra zoom
+
+        // Optional: pre-fill marker at user location
         setTempPosition([latitude, longitude]);
       },
       (err) => {
@@ -152,6 +154,10 @@ function Report() {
       throw new Error("S3 upload failed: " + txt);
     }
 
+    const S3_BUCKET =
+      import.meta.env.VITE_S3_BUCKET || "reportmitra-report-images-dc";
+    const AWS_REGION = import.meta.env.VITE_AWS_REGION || "ap-south-1";
+
     return { key };
   };
 
@@ -187,7 +193,6 @@ function Report() {
       return;
     }
 
-    // Validation
     let hasError = false;
     if (!formData.issue_title.trim()) {
       setErrors((p) => ({ ...p, issue_title: "Issue title is required" }));
@@ -212,9 +217,9 @@ function Report() {
       hasError = true;
     }
     if (hasError) {
+      setIsSubmitting(false);
       return;
     }
-
     setIsSubmitting(true);
 
     try {
@@ -232,7 +237,6 @@ function Report() {
 
       let imageUrl = formData.image_url || "";
 
-      // Step 1: Upload image to S3
       if (selectedFile) {
         try {
           const { key } = await uploadFileToS3(selectedFile);
@@ -249,31 +253,23 @@ function Report() {
         }
       }
 
-      // Step 2: Classify image using ML model
+      // ML Classification
       let department = "Manual";
       if (selectedFile) {
         try {
           setIsClassifying(true);
-          
-          // Convert file to base64
-          const base64Image = await fileToBase64(selectedFile);
-          
-          // Call the ML API
-          department = await classifyImage(base64Image, getAuthHeaders);
-          
+          const base64 = await fileToBase64(selectedFile);
+          department = await classifyImage(base64, getAuthHeaders);
           if (import.meta.env.DEV) {
-            console.log("ML Predicted Department:", department);
+            console.log("AI Department:", department);
           }
-          
           setIsClassifying(false);
         } catch (err) {
           console.error("Classification failed:", err);
           setIsClassifying(false);
-          // Continue with "Manual" if classification fails
         }
       }
 
-      // Step 3: Submit the report with the predicted department
       const headers =
         typeof getAuthHeaders === "function"
           ? await getAuthHeaders()
@@ -284,13 +280,9 @@ function Report() {
         location: formData.location,
         issue_description: formData.issue_description,
         image_url: imageUrl,
-        department: department, // This is now from ML model
+        department: department,
         status: "pending",
       };
-
-      if (import.meta.env.DEV) {
-        console.log("Submitting report with payload:", payload);
-      }
 
       const response = await fetch(getApiUrl("/reports/"), {
         method: "POST",
@@ -314,25 +306,31 @@ function Report() {
       if (import.meta.env.DEV) {
         console.log("Report submit result:", result);
       }
-      
       setApplicationId(result.tracking_id);
       setShowSuccessPopup(true);
 
-      // Reset form
       setFormData({
         issue_title: "",
         location: "",
         issue_description: "",
         image_url: "",
+        department: "",
       });
       setSelectedFile(null);
       setPreview(null);
       const fileInput = document.getElementById("fileInput");
       if (fileInput) fileInput.value = "";
-      
     } catch (err) {
       console.error("Submit error:", err);
-      alert(`Failed to submit report: ${err.message}`);
+      if (err.message?.includes("issue_title")) {
+        setErrors((p) => ({ ...p, issue_title: "Issue title is required" }));
+      }
+      if (err.message?.includes("issue_description")) {
+        setErrors((p) => ({
+          ...p,
+          issue_description: "Issue description is required",
+        }));
+      }
     } finally {
       setIsSubmitting(false);
       setIsClassifying(false);
@@ -405,7 +403,7 @@ function Report() {
 
     useEffect(() => {
       map.setView(center, zoom, { animate: true });
-    }, [center, zoom, map]);
+    }, [center, zoom]);
 
     return null;
   }
@@ -417,6 +415,7 @@ function Report() {
       {showUnverifiedPopup && (
         <div className="fixed inset-0 bg-black flex items-center justify-center z-50 p-6 overflow-y-auto">
           <div className="max-w-2xl w-full text-white my-8">
+
             <div className="flex justify-center mb-6">
               <div className="w-20 h-20">
                 <img
@@ -492,12 +491,12 @@ function Report() {
               </p>
               <div className="flex items-center justify-center">
                 <div className="flex">
-                  <code className="bg-green-200 border-2 px-3 text-2xl font-bold text-green-700 border-green-600 py-2 rounded-l-md flex items-center">
+                  <code className="bg-green-200  border-2 px-3 text-2xl font-bold text-green-700 border-green-600 py-2 rounded-l-md flex items-center">
                     {applicationId}
                   </code>
                   <button
                     onClick={copyToClipboard}
-                    className="text-white border-2 border-green-600 transition py-2 px-3 cursor-pointer rounded-r-md bg-green-600"
+                    className="text-white  border-2 border-green-600 transition py-2 px-3 cursor-pointer rounded-r-md bg-green-600"
                     title="Copy to clipboard"
                   >
                     <img src={Copy} alt="" className="h-7" />
@@ -526,7 +525,6 @@ function Report() {
           </div>
         </div>
       )}
-
       {showMap && (
         <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex items-center justify-center">
           <div className="bg-white rounded-xl w-full max-w-3xl p-4">
@@ -541,7 +539,9 @@ function Report() {
                 className="h-full w-full"
               >
                 <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+
                 <RecenterMap center={mapCenter} zoom={mapZoom} />
+
                 <LocationPicker
                   position={tempPosition}
                   onSelect={async (lat, lng) => {
@@ -592,7 +592,10 @@ function Report() {
       )}
 
       <main className="flex-grow bg-gray-50 flex justify-center py-8 md:py-12">
-        <div className="bg-white w-full max-w-6xl rounded-2xl shadow-md px-4 sm:px-6 md:px-10 py-6 md:py-8">
+        <div
+          className="bg-white w-full max-w-6xl rounded-2xl shadow-md
+          px-4 sm:px-6 md:px-10 py-6 md:py-8"
+        >
           <h1 className="text-center font-extrabold text-3xl md:text-5xl mb-6">
             Issue a Report
           </h1>
@@ -607,9 +610,18 @@ function Report() {
 
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
               {[
-                { label: "First Name", value: firstNameDisplay },
-                { label: "Middle Name", value: middleNameDisplay },
-                { label: "Last Name", value: lastNameDisplay },
+                {
+                  label: "First Name",
+                  value: firstNameDisplay,
+                },
+                {
+                  label: "Middle Name",
+                  value: middleNameDisplay,
+                },
+                {
+                  label: "Last Name",
+                  value: lastNameDisplay,
+                },
               ].map((f) => (
                 <div key={f.label} className="flex flex-col font-bold">
                   <label>{f.label}</label>
@@ -694,10 +706,24 @@ function Report() {
                 </div>
               </div>
 
-              <div className="md:col-span-2 flex flex-col font-bold space-y-4 bg-gray-50 border rounded-xl p-4 h-full">
+              <div
+                className="md:col-span-2 flex flex-col font-bold space-y-4
+  bg-gray-50 border rounded-xl p-4 h-full"
+              >
                 <label>Issue Image</label>
+                <a
+                  href="https://www.precisely.com/glossary/geotagging/"
+                  className="underline text-sm text-blue-700 -mt-1"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                ></a>
 
-                <div className="border-2 border-dashed border-gray-300 rounded-xl flex-1 min-h-[220px] lg:min-h-[260px] flex flex-col items-center justify-center gap-2 text-gray-500 overflow-hidden bg-white">
+                <div
+                  className="border-2 border-dashed border-gray-300 rounded-xl
+  flex-1 min-h-[220px] lg:min-h-[260px]
+  flex flex-col items-center justify-center gap-2
+  text-gray-500 overflow-hidden bg-white"
+                >
                   {preview ? (
                     <img
                       src={preview}
@@ -717,7 +743,9 @@ function Report() {
                 <div className="flex flex-col gap-2">
                   <label
                     htmlFor="fileInput"
-                    className="cursor-pointer bg-white border-2 border-gray-400 px-4 py-2.5 rounded-md flex items-center justify-center gap-2 text-sm font-semibold hover:bg-gray-50 hover:border-gray-400 transition"
+                    className="cursor-pointer bg-white border-2 border-gray-400 px-4 py-2.5 rounded-md
+  flex items-center justify-center gap-2 text-sm font-semibold
+  hover:bg-gray-50 hover:border-gray-400 transition"
                   >
                     <img src={folder} alt="" className="h-4 w-4" />
                     Choose File
@@ -745,7 +773,10 @@ function Report() {
               </div>
             </div>
 
-            <div className="flex flex-col md:flex-row justify-between items-center border-t pt-6 mt-6 gap-4">
+            <div
+              className="flex flex-col md:flex-row justify-between items-center
+              border-t pt-6 mt-6 gap-4"
+            >
               <div className="flex flex-col gap-2 font-bold w-full md:max-w-[60%]">
                 <label className="whitespace-nowrap flex items-center gap-1">
                   <MapPin className="w-4 h-4 text-gray-600" />
@@ -760,7 +791,8 @@ function Report() {
                     readOnly
                     required
                     placeholder="Choose location from map"
-                    className="border px-3 py-2 rounded-md w-full bg-gray-100 text-gray-600 cursor-not-allowed"
+                    className="border px-3 py-2 rounded-md w-full
+      bg-gray-100 text-gray-600 cursor-not-allowed"
                   />
 
                   <button
@@ -781,12 +813,12 @@ function Report() {
               <button
                 onClick={handleSubmit}
                 disabled={isSubmitting || isClassifying}
-                className="px-6 py-2 bg-black text-white rounded-xl text-lg font-bold hover:scale-105 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-6 py-2 bg-black text-white rounded-xl text-lg font-bold hover:scale-105 transition disabled:opacity-50"
               >
-                {isSubmitting
-                  ? isClassifying
-                    ? "Analyzing image..."
-                    : "Submitting..."
+                {isSubmitting 
+                  ? isClassifying 
+                    ? "Analyzing image..." 
+                    : "Submitting..." 
                   : "Submit Report"}
               </button>
             </div>
