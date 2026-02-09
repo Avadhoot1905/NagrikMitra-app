@@ -36,11 +36,14 @@ function Report() {
   const [showMap, setShowMap] = useState(false);
   const [tempLocation, setTempLocation] = useState(null);
   const [tempPosition, setTempPosition] = useState(null);
+  const [isExtractingLocation, setIsExtractingLocation] = useState(false);
+  const [geotagWarning, setGeotagWarning] = useState("");
+  const [copiedId, setCopiedId] = useState(false);
 
   const INDIA_CENTER = [20.5937, 78.9629];
 
-const [mapCenter, setMapCenter] = useState(INDIA_CENTER);
-const [mapZoom, setMapZoom] = useState(5);
+  const [mapCenter, setMapCenter] = useState(INDIA_CENTER);
+  const [mapZoom, setMapZoom] = useState(5);
 
 
   const [formData, setFormData] = useState({
@@ -281,7 +284,8 @@ const [mapZoom, setMapZoom] = useState(5);
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(applicationId);
-    alert("Application ID copied to clipboard!");
+    setCopiedId(true);
+    setTimeout(() => setCopiedId(false), 2000);
   };
 
   const aadhaar = userProfile?.aadhaar || null;
@@ -467,7 +471,6 @@ function RecenterMap({ center, zoom }) {
               </button>
             </div>
           </div>
-        </div>
       )}
 
       {/* Map Modal */}
@@ -513,13 +516,45 @@ function RecenterMap({ center, zoom }) {
                     }
                   }}
                 />
-                <LocationMarker
-                  onConfirm={(address, pos) => {
-                    setFormData((p) => ({ ...p, location: address }));
-                    setShowMap(false);
-                  }}
-                />
               </MapContainer>
+            </div>
+
+            <div className="p-6 border-t border-gray-200">
+              <div className="mb-4">
+                <p className="text-sm font-semibold text-gray-700 mb-2">
+                  Selected Location:
+                </p>
+                <p className="text-sm text-gray-900 bg-gray-50 p-3 rounded-lg">
+                  {tempLocation || "Click on the map to select a location"}
+                </p>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    setShowMap(false);
+                    setTempPosition(null);
+                    setTempLocation(null);
+                  }}
+                  className="flex-1 px-4 py-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg font-semibold transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    if (tempLocation) {
+                      setFormData((p) => ({ ...p, location: tempLocation }));
+                      setShowMap(false);
+                      setErrors((p) => ({ ...p, location: "" }));
+                    } else {
+                      alert("Please select a location on the map");
+                    }
+                  }}
+                  disabled={!tempLocation}
+                  className="flex-1 px-4 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg font-semibold transition-all"
+                >
+                  Confirm Location
+                </button>
+              </div>
             </div>
           </div>
         </div>
