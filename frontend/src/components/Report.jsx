@@ -7,6 +7,7 @@ import Tick from "../assets/tick.png";
 import Copy from "../assets/copy.jpg";
 import Logo from "../assets/logo-1.png";
 import { classifyImage } from "../ai/classifyImage";
+import { useMap } from "react-leaflet";
 import {
   User,
   FileText,
@@ -31,6 +32,12 @@ function Report() {
   const [showMap, setShowMap] = useState(false);
   const [tempLocation, setTempLocation] = useState(null);
   const [tempPosition, setTempPosition] = useState(null);
+
+  const INDIA_CENTER = [20.5937, 78.9629];
+
+const [mapCenter, setMapCenter] = useState(INDIA_CENTER);
+const [mapZoom, setMapZoom] = useState(5);
+
 
   const [formData, setFormData] = useState({
     issue_title: "",
@@ -67,6 +74,39 @@ function Report() {
     };
     if (user) fetchUserProfile();
   }, [user, getAuthHeaders]);
+
+    useEffect(() => {
+    if (!showMap) return;
+
+    if (!navigator.geolocation) {
+      console.warn("Geolocation not supported");
+      setMapCenter(INDIA_CENTER);
+      setMapZoom(5);
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude } = pos.coords;
+
+        setMapCenter([latitude, longitude]);
+        setMapZoom(18); // ultra zoom
+
+        // Optional: pre-fill marker at user location
+        setTempPosition([latitude, longitude]);
+      },
+      (err) => {
+        console.warn("Location permission denied", err);
+        setMapCenter(INDIA_CENTER);
+        setMapZoom(5);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0,
+      }
+    );
+  }, [showMap]);
 
   const handleFileChange = (e) => {
     const file = e.target.files && e.target.files[0];
@@ -346,6 +386,16 @@ function Report() {
     return position ? <Marker position={position} icon={markerIcon} /> : null;
   }
 
+function RecenterMap({ center, zoom }) {
+  const map = useMap();
+
+  useEffect(() => {
+    map.setView(center, zoom, { animate: true });
+  }, [center, zoom]);
+
+  return null;
+}
+
   return (
     <div className="min-h-screen flex flex-col">
       <Navbar />
@@ -472,11 +522,14 @@ function Report() {
 
             <div className="h-[400px] rounded-lg overflow-hidden">
               <MapContainer
-                center={[20.5937, 78.9629]}
-                zoom={5}
+                center={mapCenter}
+                zoom={mapZoom}
                 className="h-full w-full"
               >
                 <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+
+                <RecenterMap center={mapCenter} zoom={mapZoom} />
+
                 <LocationPicker
                   position={tempPosition}
                   onSelect={async (lat, lng) => {
