@@ -1,8 +1,14 @@
+// frontend/src/components/Report.jsx
+// Updated version with ML model integration
+
 import { useState, useEffect } from "react";
 import Navbar from "./MiniNavbar";
 import folder from "../assets/foldericon.png";
 import { useAuth } from "../AuthProvider";
 import Footer from "./Footer";
+import Tick from "../assets/tick.png";
+import Copy from "../assets/copy.jpg";
+import Logo from "../assets/logo-1.png";
 import { classifyImage } from "../ai/classifyImage";
 import { useMap } from "react-leaflet";
 import {
@@ -10,14 +16,6 @@ import {
   FileText,
   Image as ImageIcon,
   MapPin,
-  AlertCircle,
-  CheckCircle,
-  Calendar,
-  Mail,
-  Phone,
-  X,
-  Copy,
-  ArrowRight,
 } from "lucide-react";
 import "leaflet/dist/leaflet.css";
 import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
@@ -36,15 +34,13 @@ function Report() {
   const [showMap, setShowMap] = useState(false);
   const [tempLocation, setTempLocation] = useState(null);
   const [tempPosition, setTempPosition] = useState(null);
-  const [isExtractingLocation, setIsExtractingLocation] = useState(false);
-  const [geotagWarning, setGeotagWarning] = useState("");
-  const [copiedId, setCopiedId] = useState(false);
 
   const INDIA_CENTER = [20.5937, 78.9629];
-
   const [mapCenter, setMapCenter] = useState(INDIA_CENTER);
   const [mapZoom, setMapZoom] = useState(5);
 
+  // Add state for ML classification status
+  const [isClassifying, setIsClassifying] = useState(false);
 
   const [formData, setFormData] = useState({
     issue_title: "",
@@ -52,6 +48,7 @@ function Report() {
     issue_description: "",
     image_url: "",
   });
+  
   const [errors, setErrors] = useState({
     issue_title: "",
     issue_description: "",
@@ -82,7 +79,7 @@ function Report() {
     if (user) fetchUserProfile();
   }, [user, getAuthHeaders]);
 
-    useEffect(() => {
+  useEffect(() => {
     if (!showMap) return;
 
     if (!navigator.geolocation) {
@@ -95,11 +92,8 @@ function Report() {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude } = pos.coords;
-
         setMapCenter([latitude, longitude]);
-        setMapZoom(18); // ultra zoom
-
-        // Optional: pre-fill marker at user location
+        setMapZoom(18);
         setTempPosition([latitude, longitude]);
       },
       (err) => {
@@ -158,70 +152,145 @@ function Report() {
       throw new Error("S3 upload failed: " + txt);
     }
 
-    const S3_BUCKET =
-      import.meta.env.VITE_S3_BUCKET || "dev-local-assets-temp";
-    const S3_REGION = import.meta.env.VITE_S3_REGION || "ap-south-1";
-
-    const s3ObjectUrl = `https://${S3_BUCKET}.s3.${S3_REGION}.amazonaws.com/${key}`;
-    return s3ObjectUrl;
+    return { key };
   };
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
-    setErrors((prev) => ({ ...prev, [name]: "" }));
+    setFormData((p) => ({ ...p, [name]: value }));
+    setErrors((p) => ({ ...p, [name]: "" }));
   };
 
-  const validateForm = () => {
-    const newErrors = {};
-    let isValid = true;
+  /**
+   * Convert file to base64 string
+   */
+  const fileToBase64 = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
 
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setErrors({
+      issue_title: "",
+      issue_description: "",
+      image: "",
+      location: "",
+    });
+
+    if (!userProfile?.is_aadhaar_verified) {
+      setShowUnverifiedPopup(true);
+      return;
+    }
+
+    // Validation
+    let hasError = false;
     if (!formData.issue_title.trim()) {
-      newErrors.issue_title = "Title is required";
-      isValid = false;
+      setErrors((p) => ({ ...p, issue_title: "Issue title is required" }));
+      hasError = true;
     }
-
     if (!formData.issue_description.trim()) {
-      newErrors.issue_description = "Description is required";
-      isValid = false;
+      setErrors((p) => ({
+        ...p,
+        issue_description: "Issue description is required",
+      }));
+      hasError = true;
     }
-
-    if (!selectedFile && !formData.image_url) {
-      newErrors.image = "Image is required";
-      isValid = false;
+    if (!selectedFile) {
+      setErrors((p) => ({ ...p, image: "Issue image is required" }));
+      hasError = true;
     }
-
     if (!formData.location) {
-      newErrors.location = "Location is required";
-      isValid = false;
+      setErrors((p) => ({
+        ...p,
+        location: "Please choose the issue location",
+      }));
+      hasError = true;
     }
-
-    setErrors(newErrors);
-    return isValid;
-  };
-
-  const handleSubmit = async () => {
-    if (!validateForm()) {
-      alert("Please fill in all required fields");
+    if (hasError) {
       return;
     }
 
     setIsSubmitting(true);
 
     try {
-      let s3Url = formData.image_url;
-      if (selectedFile) {
-        s3Url = await uploadFileToS3(selectedFile);
+      if (!user) {
+        alert("Please log in before submitting a report.");
+        setIsSubmitting(false);
+        return;
       }
 
-      const authHeaders = await getAuthHeaders();
+      if (!userProfile) {
+        alert("Profile data is still loading. Please wait and try again.");
+        setIsSubmitting(false);
+        return;
+      }
 
-      const reportPayload = {
+      let imageUrl = formData.image_url || "";
+
+      // Step 1: Upload image to S3
+      if (selectedFile) {
+        try {
+          const { key } = await uploadFileToS3(selectedFile);
+          imageUrl = key;
+
+          if (import.meta.env.DEV) {
+            console.log("Uploaded image URL:", imageUrl);
+          }
+        } catch (uploadErr) {
+          console.error("Image upload error:", uploadErr);
+          alert("Failed to upload image. Please try again.");
+          setIsSubmitting(false);
+          return;
+        }
+      }
+
+      // Step 2: Classify image using ML model
+      let department = "Manual";
+      if (selectedFile) {
+        try {
+          setIsClassifying(true);
+          
+          // Convert file to base64
+          const base64Image = await fileToBase64(selectedFile);
+          
+          // Call the ML API
+          department = await classifyImage(base64Image, getAuthHeaders);
+          
+          if (import.meta.env.DEV) {
+            console.log("ML Predicted Department:", department);
+          }
+          
+          setIsClassifying(false);
+        } catch (err) {
+          console.error("Classification failed:", err);
+          setIsClassifying(false);
+          // Continue with "Manual" if classification fails
+        }
+      }
+
+      // Step 3: Submit the report with the predicted department
+      const headers =
+        typeof getAuthHeaders === "function"
+          ? await getAuthHeaders()
+          : { "Content-Type": "application/json" };
+
+      const payload = {
         issue_title: formData.issue_title,
-        issue_description: formData.issue_description,
         location: formData.location,
-        image_url: s3Url,
+        issue_description: formData.issue_description,
+        image_url: imageUrl,
+        department: department, // This is now from ML model
+        status: "pending",
       };
+
+      if (import.meta.env.DEV) {
+        console.log("Submitting report with payload:", payload);
+      }
 
       const response = await fetch(getApiUrl("/reports/"), {
         method: "POST",
@@ -245,33 +314,28 @@ function Report() {
       if (import.meta.env.DEV) {
         console.log("Report submit result:", result);
       }
+      
       setApplicationId(result.tracking_id);
       setShowSuccessPopup(true);
 
+      // Reset form
       setFormData({
         issue_title: "",
         location: "",
         issue_description: "",
         image_url: "",
-        department: "",
       });
       setSelectedFile(null);
       setPreview(null);
       const fileInput = document.getElementById("fileInput");
       if (fileInput) fileInput.value = "";
+      
     } catch (err) {
       console.error("Submit error:", err);
-      if (err.message?.includes("issue_title")) {
-        setErrors((p) => ({ ...p, issue_title: "Issue title is required" }));
-      }
-      if (err.message?.includes("issue_description")) {
-        setErrors((p) => ({
-          ...p,
-          issue_description: "Issue description is required",
-        }));
-      }
+      alert(`Failed to submit report: ${err.message}`);
     } finally {
       setIsSubmitting(false);
+      setIsClassifying(false);
     }
   };
 
@@ -284,8 +348,7 @@ function Report() {
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(applicationId);
-    setCopiedId(true);
-    setTimeout(() => setCopiedId(false), 2000);
+    alert("Application ID copied to clipboard!");
   };
 
   const aadhaar = userProfile?.aadhaar || null;
@@ -337,168 +400,148 @@ function Report() {
     return position ? <Marker position={position} icon={markerIcon} /> : null;
   }
 
-function RecenterMap({ center, zoom }) {
-  const map = useMap();
+  function RecenterMap({ center, zoom }) {
+    const map = useMap();
 
-  useEffect(() => {
-    map.setView(center, zoom, { animate: true });
-  }, [center, zoom]);
+    useEffect(() => {
+      map.setView(center, zoom, { animate: true });
+    }, [center, zoom, map]);
 
-  return null;
-}
-
-  const userFields = [
-    {
-      label: "Full Name",
-      value:
-        userProfile?.aadhaar?.full_name ||
-        `${userProfile?.aadhaar?.first_name || ""} ${
-          userProfile?.aadhaar?.last_name || ""
-        }`.trim() ||
-        "Not available",
-      icon: User,
-    },
-    {
-      label: "Email",
-      value: userProfile?.email || "Not available",
-      icon: Mail,
-    },
-    {
-      label: "Phone",
-      value: userProfile?.aadhaar?.phone_number || "Not available",
-      icon: Phone,
-    },
-  ];
+    return null;
+  }
 
   return (
-    <div className="min-h-screen flex flex-col bg-white">
+    <div className="min-h-screen flex flex-col">
       <Navbar />
 
-      {/* Unverified Popup */}
       {showUnverifiedPopup && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 relative">
-            <button
-              onClick={() => setShowUnverifiedPopup(false)}
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition"
-            >
-              <X className="w-6 h-6" />
-            </button>
-
-            <div className="flex flex-col items-center text-center">
-              <div className="w-20 h-20 bg-orange-100 rounded-full flex items-center justify-center mb-6">
-                <AlertCircle className="w-10 h-10 text-orange-600" />
+        <div className="fixed inset-0 bg-black flex items-center justify-center z-50 p-6 overflow-y-auto">
+          <div className="max-w-2xl w-full text-white my-8">
+            <div className="flex justify-center mb-6">
+              <div className="w-20 h-20">
+                <img
+                  src={Logo}
+                  alt="ReportMitra Logo"
+                  className="w-full h-full object-contain"
+                />
               </div>
-              
-              <h2 className="text-2xl font-black text-gray-900 mb-3">
-                Aadhaar Verification Required
-              </h2>
-              
-              <p className="text-gray-600 mb-6 leading-relaxed">
-                To ensure authenticity and prevent misuse, all users must complete
-                Aadhaar verification before submitting reports.
+            </div>
+
+            <h1 className="text-3xl md:text-4xl font-bold text-center mb-6">
+              Verification Required
+            </h1>
+
+            <div className="space-y-6 text-base md:text-lg leading-relaxed">
+              <p className="text-gray-300 text-center">
+                You must complete{" "}
+                <strong className="text-white">Aadhaar verification</strong>{" "}
+                before submitting reports. This ensures authenticity and
+                prevents platform misuse.
               </p>
 
+              <div className="border-t border-gray-700 pt-6">
+                <h2 className="text-xl font-bold mb-4 text-center">
+                  Why verification matters
+                </h2>
+                <p className="text-gray-300 text-center leading-relaxed">
+                  Aadhaar verification links your identity to every report you
+                  submit, ensuring that all reports come from real, verified
+                  citizens. This prevents spam and fake reports, creates
+                  accountability between the community and government, and
+                  complies with mandatory government regulations for civic
+                  reporting platforms. Your verified identity builds trust in
+                  the system while protecting it from misuse.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-4 mt-8">
               <button
-                onClick={() => (window.location.href = "/profile")}
-                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-3.5 rounded-lg font-bold transition-all duration-300 shadow-md hover:shadow-lg flex items-center justify-center gap-2"
+                onClick={() => {
+                  window.location.href = "/profile";
+                }}
+                className="bg-white text-black py-3 px-6 rounded-lg font-bold text-lg hover:bg-gray-200 transition-all duration-200 cursor-pointer"
               >
-                Go to Profile
-                <ArrowRight className="w-5 h-5" />
+                Verify Now
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Success Popup */}
       {showSuccessPopup && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 relative">
-            <button
-              onClick={() => {
-                setShowSuccessPopup(false);
-                setApplicationId(null);
-              }}
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition"
-            >
-              <X className="w-6 h-6" />
-            </button>
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 md:p-8 text-center">
+            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <span className="text-2xl">
+                <img src={Tick} alt="" className="" />
+              </span>
+            </div>
 
-            <div className="flex flex-col items-center text-center">
-              <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mb-6">
-                <CheckCircle className="w-10 h-10 text-emerald-600" />
-              </div>
-              
-              <h2 className="text-2xl font-black text-gray-900 mb-3">
-                Report Submitted Successfully!
-              </h2>
-              
-              <p className="text-gray-600 mb-6 leading-relaxed">
-                Your complaint has been registered. Use the tracking ID below to
-                monitor your report's progress.
+            <h2 className="text-2xl font-bold text-green-600 mb-3">
+              Report Submitted Successfully!
+            </h2>
+
+            <p className="text-green-600 font-bold mb-4">
+              Your report has been submitted and is now under review.
+            </p>
+
+            <div className="border-3 border-dashed border-green-600 rounded-lg p-4 mb-6">
+              <p className="text-2xl text-green-600 mb-2 font-extrabold">
+                Application ID for tracking
               </p>
-
-              <div className="w-full bg-emerald-50 border-2 border-emerald-200 rounded-xl p-4 mb-6">
-                <p className="text-xs font-semibold text-emerald-700 uppercase tracking-wide mb-2">
-                  Tracking ID
-                </p>
-                <div className="flex items-center justify-between gap-2">
-                  <code className="text-xl font-mono font-bold text-emerald-900">
+              <div className="flex items-center justify-center">
+                <div className="flex">
+                  <code className="bg-green-200 border-2 px-3 text-2xl font-bold text-green-700 border-green-600 py-2 rounded-l-md flex items-center">
                     {applicationId}
                   </code>
                   <button
-                    onClick={() => copyToClipboard(applicationId)}
-                    className="p-2 hover:bg-emerald-100 rounded-lg transition"
+                    onClick={copyToClipboard}
+                    className="text-white border-2 border-green-600 transition py-2 px-3 cursor-pointer rounded-r-md bg-green-600"
                     title="Copy to clipboard"
                   >
-                    {copiedId ? (
-                      <CheckCircle className="w-5 h-5 text-emerald-600" />
-                    ) : (
-                      <Copy className="w-5 h-5 text-emerald-600" />
-                    )}
+                    <img src={Copy} alt="" className="h-7" />
                   </button>
                 </div>
               </div>
             </div>
 
+            <div className="flex flex-col gap-3">
               <button
-                onClick={() => (window.location.href = "/track")}
-                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-3.5 rounded-lg font-bold transition-all duration-300 shadow-md hover:shadow-lg flex items-center justify-center gap-2"
+                onClick={closePopup}
+                className="bg-green-600 text-white py-3 px-6 rounded-lg font-semibold hover:bg-green-700 transition cursor-pointer"
               >
-                Track Report
-                <ArrowRight className="w-5 h-5" />
+                Continue
+              </button>
+              <button
+                onClick={() => {
+                  closePopup();
+                  window.location.href = `/track`;
+                }}
+                className="text-green-600 hover:text-green-700 underline hover:scale-110 cursor-pointer transition font-bold"
+              >
+                Track this report
               </button>
             </div>
           </div>
+        </div>
       )}
 
-      {/* Map Modal */}
       {showMap && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[80vh] overflow-hidden flex flex-col">
-            <div className="flex items-center justify-between p-6 border-b border-gray-200">
-              <h3 className="text-2xl font-black text-gray-900">
-                Select Issue Location
-              </h3>
-              <button
-                onClick={() => setShowMap(false)}
-                className="text-gray-400 hover:text-gray-600 transition"
-              >
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-            
-            <div className="flex-1 relative">
+        <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex items-center justify-center">
+          <div className="bg-white rounded-xl w-full max-w-3xl p-4">
+            <h2 className="text-xl font-bold mb-3 text-center">
+              Choose Issue Location
+            </h2>
+
+            <div className="h-[400px] rounded-lg overflow-hidden">
               <MapContainer
-                center={tempPosition || [12.9716, 77.5946]}
-                zoom={13}
-                style={{ height: "100%", width: "100%" }}
+                center={mapCenter}
+                zoom={mapZoom}
+                className="h-full w-full"
               >
                 <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-
                 <RecenterMap center={mapCenter} zoom={mapZoom} />
-
                 <LocationPicker
                   position={tempPosition}
                   onSelect={async (lat, lng) => {
@@ -519,325 +562,232 @@ function RecenterMap({ center, zoom }) {
               </MapContainer>
             </div>
 
-            <div className="p-6 border-t border-gray-200">
-              <div className="mb-4">
-                <p className="text-sm font-semibold text-gray-700 mb-2">
-                  Selected Location:
-                </p>
-                <p className="text-sm text-gray-900 bg-gray-50 p-3 rounded-lg">
-                  {tempLocation || "Click on the map to select a location"}
-                </p>
-              </div>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => {
-                    setShowMap(false);
-                    setTempPosition(null);
-                    setTempLocation(null);
-                  }}
-                  className="flex-1 px-4 py-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg font-semibold transition-all"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => {
-                    if (tempLocation) {
-                      setFormData((p) => ({ ...p, location: tempLocation }));
-                      setShowMap(false);
-                      setErrors((p) => ({ ...p, location: "" }));
-                    } else {
-                      alert("Please select a location on the map");
-                    }
-                  }}
-                  disabled={!tempLocation}
-                  className="flex-1 px-4 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg font-semibold transition-all"
-                >
-                  Confirm Location
-                </button>
-              </div>
-            </div>
+            {tempLocation && (
+              <button
+                onClick={() => {
+                  setFormData((p) => ({ ...p, location: tempLocation }));
+                  setErrors((p) => ({ ...p, location: "" }));
+                  setTempLocation(null);
+                  setTempPosition(null);
+                  setShowMap(false);
+                }}
+                className="mt-3 w-full bg-green-600 text-white py-2 rounded-lg font-bold hover:bg-green-700 transition"
+              >
+                Confirm Location
+              </button>
+            )}
+
+            <button
+              onClick={() => {
+                setTempLocation(null);
+                setTempPosition(null);
+                setShowMap(false);
+              }}
+              className="mt-4 w-full bg-black text-white py-2 rounded-lg font-bold"
+            >
+              Cancel
+            </button>
           </div>
         </div>
       )}
 
-      <main className="flex-grow bg-gradient-to-b from-emerald-50 to-white py-12">
-        <div className="container mx-auto px-4 sm:px-6 lg:px-8 max-w-6xl">
-          <div className="bg-white rounded-2xl shadow-lg p-6 md:p-10">
-            {/* Header */}
-            <div className="text-center mb-8">
-              <h1 className="text-4xl md:text-5xl font-black text-gray-900 mb-3">
-                Report an Issue
-              </h1>
-              <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-                Help us improve your community by reporting civic issues. Fill in the
-                details below to submit your complaint.
-              </p>
+      <main className="flex-grow bg-gray-50 flex justify-center py-8 md:py-12">
+        <div className="bg-white w-full max-w-6xl rounded-2xl shadow-md px-4 sm:px-6 md:px-10 py-6 md:py-8">
+          <h1 className="text-center font-extrabold text-3xl md:text-5xl mb-6">
+            Issue a Report
+          </h1>
+
+          <div className="flex-1 flex flex-col justify-center">
+            <div className="flex items-center gap-2 mb-4">
+              <User className="w-5 h-5 text-gray-700" />
+              <h2 className="text-lg font-semibold text-gray-800">
+                Citizen Details
+              </h2>
             </div>
 
-            <div className="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-4 mb-8 flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
-              <p className="text-sm text-emerald-800">
-                <strong>Note:</strong> Please ensure that the uploaded image is
-                geotagged (contains location data). If your image doesn't have GPS
-                data, you can manually select the location on the map.
-              </p>
-            </div>
-
-            <hr className="my-8 border-gray-200" />
-
-            {/* User Info */}
-            <div className="mb-8">
-              <div className="flex items-center gap-2 mb-4">
-                <User className="w-6 h-6 text-emerald-600" />
-                <h2 className="text-2xl font-bold text-gray-900">
-                  Your Information
-                </h2>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {userFields.map((field, idx) => {
-                  const Icon = field.icon;
-                  return (
-                    <div key={idx} className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                      <div className="flex items-center gap-2 mb-2">
-                        <Icon className="w-4 h-4 text-gray-500" />
-                        <label className="text-sm font-semibold text-gray-700">
-                          {field.label}
-                        </label>
-                      </div>
-                      <p className="text-gray-900 font-medium">{field.value}</p>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mt-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <Calendar className="w-4 h-4 text-gray-500" />
-                  <label className="text-sm font-semibold text-gray-700">
-                    Issue Date
-                  </label>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+              {[
+                { label: "First Name", value: firstNameDisplay },
+                { label: "Middle Name", value: middleNameDisplay },
+                { label: "Last Name", value: lastNameDisplay },
+              ].map((f) => (
+                <div key={f.label} className="flex flex-col font-bold">
+                  <label>{f.label}</label>
+                  <input
+                    type="text"
+                    readOnly
+                    value={f.value}
+                    className="border px-2 py-1 rounded-md text-gray-500"
+                  />
                 </div>
-                <p className="text-gray-900 font-medium">
-                  {new Date(getCurrentDate()).toLocaleDateString("en-IN", {
-                    day: "2-digit",
-                    month: "long",
-                    year: "numeric",
-                  })}
-                </p>
+              ))}
+
+              <div className="flex flex-col font-bold">
+                <label>Issue Date</label>
+                <input
+                  type="date"
+                  readOnly
+                  value={getCurrentDate()}
+                  className="border px-2 py-1 rounded-md text-gray-500"
+                />
               </div>
             </div>
 
-            <hr className="my-8 border-gray-200" />
+            <hr className="my-4" />
 
-            {/* Issue Details */}
-            <div className="mb-8">
-              <div className="flex items-center gap-2 mb-6">
-                <FileText className="w-6 h-6 text-emerald-600" />
-                <h2 className="text-2xl font-bold text-gray-900">
-                  Issue Details
-                </h2>
-              </div>
+            <div className="flex items-center gap-2 mb-4 mt-6">
+              <FileText className="w-5 h-5 text-gray-700" />
+              <h2 className="text-lg font-semibold text-gray-800">
+                Issue Details
+              </h2>
+            </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Left side - Text inputs */}
-                <div className="lg:col-span-2 space-y-6">
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-2">
-                      Issue Title <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      name="issue_title"
-                      placeholder="Briefly describe the issue (e.g., 'Broken streetlight on MG Road')"
-                      value={formData.issue_title}
-                      onChange={handleInputChange}
-                      maxLength={80}
-                      className="w-full px-4 py-3 bg-white border border-gray-300 text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all"
-                    />
-                    <div className="flex justify-between items-center mt-2">
-                      <span className="text-xs text-gray-500">
-                        {formData.issue_title.length}/80 characters
-                      </span>
-                      {errors.issue_title && (
-                        <span className="text-xs text-red-600 font-semibold">
-                          {errors.issue_title}
-                        </span>
-                      )}
-                    </div>
-                  </div>
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-8 mb-6">
+              <div className="md:col-span-3 flex flex-col font-bold space-y-2">
+                <label>Issue Title</label>
+                <input
+                  type="text"
+                  name="issue_title"
+                  placeholder="Briefly name the issue"
+                  value={formData.issue_title}
+                  onChange={handleInputChange}
+                  maxLength={80}
+                  className="border px-3 py-2 rounded-md placeholder:text-gray-500"
+                />
 
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-2">
-                      Issue Description <span className="text-red-500">*</span>
-                    </label>
-                    <textarea
-                      name="issue_description"
-                      value={formData.issue_description}
-                      onChange={handleInputChange}
-                      placeholder="Provide detailed information about the issue, including when you noticed it and any relevant details..."
-                      maxLength={500}
-                      required
-                      className="w-full px-4 py-3 bg-white border border-gray-300 text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 resize-none h-40 transition-all"
-                    />
-                    <div className="flex justify-between items-center mt-2">
-                      <span
-                        className={`text-xs ${
-                          formData.issue_description.length > 450
-                            ? "text-orange-600 font-semibold"
-                            : "text-gray-500"
-                        }`}
-                      >
-                        {formData.issue_description.length}/500 characters
-                      </span>
-                      {errors.issue_description && (
-                        <span className="text-xs text-red-600 font-semibold">
-                          {errors.issue_description}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
-                      <MapPin className="w-4 h-4 text-emerald-600" />
-                      Issue Location <span className="text-red-500">*</span>
-                      {formData.location && !geotagWarning && (
-                        <span className="text-xs font-normal text-emerald-600 ml-2">
-                          ✓ Auto-detected from image
-                        </span>
-                      )}
-                    </label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        name="location"
-                        value={formData.location}
-                        readOnly
-                        required
-                        placeholder="Auto-detected from geotagged image or manually selected"
-                        className="flex-1 px-4 py-3 bg-gray-50 border border-gray-300 text-gray-700 rounded-lg cursor-not-allowed"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowMap(true)}
-                        className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold transition-all shadow-sm hover:shadow-md"
-                      >
-                        Select on Map
-                      </button>
-                    </div>
-                    {errors.location && (
-                      <p className="text-xs text-red-600 font-semibold mt-2">
-                        {errors.location}
-                      </p>
-                    )}
-                  </div>
+                <div className="flex justify-between text-xs mt-1">
+                  <span className="text-gray-500">
+                    {formData.issue_title.length}/80 characters
+                  </span>
+                  {errors.issue_title && (
+                    <span className="text-red-600">{errors.issue_title}</span>
+                  )}
                 </div>
 
-                {/* Right side - Image upload */}
-                <div className="bg-gradient-to-br from-emerald-50 to-green-50 border-2 border-emerald-200 rounded-xl p-6 flex flex-col">
-                  <div className="flex items-center justify-between mb-3">
-                    <label className="text-sm font-semibold text-gray-900">
-                      Issue Image <span className="text-red-500">*</span>
-                    </label>
-                    {isExtractingLocation && (
-                      <span className="text-xs text-emerald-600 font-semibold animate-pulse flex items-center gap-1">
-                        <MapPin className="w-3 h-3" />
-                        Extracting GPS...
-                      </span>
-                    )}
-                  </div>
+                <label>Issue Description</label>
+                <textarea
+                  name="issue_description"
+                  value={formData.issue_description}
+                  onChange={handleInputChange}
+                  placeholder="Describe the issue in detail"
+                  maxLength={500}
+                  required
+                  className="border px-3 py-2 rounded-md placeholder:text-gray-500 resize-none h-44 lg:h-56"
+                />
 
-                  <a
-                    href="https://www.precisely.com/glossary/geotagging/"
-                    className="text-xs text-emerald-700 hover:text-emerald-800 underline mb-4 inline-block"
-                    target="_blank"
-                    rel="noopener noreferrer"
+                <div className="flex justify-between text-xs mt-1">
+                  <span
+                    className={
+                      formData.issue_description.length > 450
+                        ? "text-orange-600"
+                        : "text-gray-500"
+                    }
                   >
-                    What is geotagging?
-                  </a>
+                    {formData.issue_description.length}/500 characters
+                  </span>
 
-                  <div className="flex-1 border-2 border-dashed border-emerald-300 rounded-xl bg-white min-h-[280px] flex items-center justify-center overflow-hidden">
-                    {preview ? (
-                      <img
-                        src={preview}
-                        alt="Preview"
-                        className="w-full h-full object-contain"
-                      />
-                    ) : (
-                      <div className="flex flex-col items-center text-emerald-600">
-                        <ImageIcon className="w-12 h-12 mb-2 opacity-50" />
-                        <span className="text-sm font-medium opacity-75">
-                          No image selected
-                        </span>
-                      </div>
-                    )}
-                  </div>
+                  {errors.issue_description && (
+                    <span className="text-red-600">
+                      {errors.issue_description}
+                    </span>
+                  )}
+                </div>
+              </div>
 
-                  <div className="mt-4 space-y-3">
-                    <label
-                      htmlFor="fileInput"
-                      className="cursor-pointer bg-white hover:bg-gray-50 border-2 border-emerald-600 text-emerald-600 px-4 py-3 rounded-lg flex items-center justify-center gap-2 font-semibold transition-all shadow-sm hover:shadow-md"
-                    >
-                      <ImageIcon className="w-5 h-5" />
-                      Choose Image
-                    </label>
+              <div className="md:col-span-2 flex flex-col font-bold space-y-4 bg-gray-50 border rounded-xl p-4 h-full">
+                <label>Issue Image</label>
 
-                    <input
-                      id="fileInput"
-                      type="file"
-                      accept="image/*"
-                      onChange={handleFileChange}
-                      className="hidden"
+                <div className="border-2 border-dashed border-gray-300 rounded-xl flex-1 min-h-[220px] lg:min-h-[260px] flex flex-col items-center justify-center gap-2 text-gray-500 overflow-hidden bg-white">
+                  {preview ? (
+                    <img
+                      src={preview}
+                      alt="Preview"
+                      className="object-contain w-full h-full rounded-xl"
                     />
+                  ) : (
+                    <>
+                      <ImageIcon className="w-6 h-6 opacity-60" />
+                      <span className="text-xs text-gray-400">
+                        No image selected
+                      </span>
+                    </>
+                  )}
+                </div>
 
-                    {selectedFile && (
-                      <p className="text-xs text-gray-700 text-center truncate">
-                        📎 {selectedFile.name}
-                      </p>
-                    )}
+                <div className="flex flex-col gap-2">
+                  <label
+                    htmlFor="fileInput"
+                    className="cursor-pointer bg-white border-2 border-gray-400 px-4 py-2.5 rounded-md flex items-center justify-center gap-2 text-sm font-semibold hover:bg-gray-50 hover:border-gray-400 transition"
+                  >
+                    <img src={folder} alt="" className="h-4 w-4" />
+                    Choose File
+                  </label>
 
-                    {geotagWarning && (
-                      <div className="bg-orange-50 border border-orange-300 rounded-lg p-3">
-                        <p className="text-xs text-orange-700 font-medium">
-                          {geotagWarning}
-                        </p>
-                        <p className="text-xs text-orange-600 mt-1">
-                          💡 Tip: Use your phone's camera with location enabled
-                        </p>
-                      </div>
-                    )}
+                  <input
+                    id="fileInput"
+                    type="file"
+                    accept="image/*"
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
 
-                    {errors.image && (
-                      <p className="text-xs text-red-600 font-semibold text-center">
-                        {errors.image}
-                      </p>
-                    )}
-                  </div>
+                  {selectedFile && (
+                    <span className="text-xs text-gray-600 text-center truncate">
+                      {selectedFile.name}
+                    </span>
+                  )}
+                  {errors.image && (
+                    <p className="text-red-600 text-sm font-normal text-center">
+                      {errors.image}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
 
-            <hr className="my-8 border-gray-200" />
+            <div className="flex flex-col md:flex-row justify-between items-center border-t pt-6 mt-6 gap-4">
+              <div className="flex flex-col gap-2 font-bold w-full md:max-w-[60%]">
+                <label className="whitespace-nowrap flex items-center gap-1">
+                  <MapPin className="w-4 h-4 text-gray-600" />
+                  Issue Location
+                </label>
 
-            {/* Submit Button */}
-            <div className="flex justify-center">
+                <div className="flex gap-2 w-full">
+                  <input
+                    type="text"
+                    name="location"
+                    value={formData.location}
+                    readOnly
+                    required
+                    placeholder="Choose location from map"
+                    className="border px-3 py-2 rounded-md w-full bg-gray-100 text-gray-600 cursor-not-allowed"
+                  />
+
+                  <button
+                    type="button"
+                    onClick={() => setShowMap(true)}
+                    className="px-4 py-2 bg-gray-800 text-white rounded-md hover:bg-black"
+                  >
+                    Choose
+                  </button>
+                </div>
+                {errors.location && (
+                  <p className="text-red-600 text-sm font-normal mt-1">
+                    {errors.location}
+                  </p>
+                )}
+              </div>
+
               <button
                 onClick={handleSubmit}
-                disabled={isSubmitting}
-                className="group bg-emerald-600 hover:bg-emerald-700 text-white px-10 py-4 rounded-lg font-bold text-lg transition-all duration-300 shadow-lg hover:shadow-xl hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 flex items-center gap-3"
+                disabled={isSubmitting || isClassifying}
+                className="px-6 py-2 bg-black text-white rounded-xl text-lg font-bold hover:scale-105 transition disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isSubmitting ? (
-                  <>
-                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                    Submitting Report...
-                  </>
-                ) : (
-                  <>
-                    Submit Report
-                    <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-                  </>
-                )}
+                {isSubmitting
+                  ? isClassifying
+                    ? "Analyzing image..."
+                    : "Submitting..."
+                  : "Submit Report"}
               </button>
             </div>
           </div>
