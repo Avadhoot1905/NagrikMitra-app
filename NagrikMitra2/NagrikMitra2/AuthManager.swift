@@ -31,40 +31,20 @@ class AuthManager: ObservableObject {
     }
     
     func login(email: String, password: String) async throws {
-        do {
-            let response = try await NetworkManager.shared.login(email: email, password: password)
-            
-            await MainActor.run {
-                saveTokens(access: response.access, refresh: response.refresh)
-                self.currentUser = response.user
-            }
-        } catch {
-            // For demo: create mock user on error and continue
-            print("Login failed, using mock session: \(error.localizedDescription)")
-            await MainActor.run {
-                // Set mock tokens for demo
-                saveTokens(access: "demo_token", refresh: "demo_refresh")
-                self.currentUser = User(id: 999, email: email, username: email.components(separatedBy: "@").first)
-            }
+        let response = try await NetworkManager.shared.login(email: email, password: password)
+        
+        await MainActor.run {
+            saveTokens(access: response.access, refresh: response.refresh)
+            self.currentUser = response.user
         }
     }
     
     func register(email: String, password: String, confirmPassword: String) async throws {
-        do {
-            let response = try await NetworkManager.shared.register(email: email, password: password, confirmPassword: confirmPassword)
-            
-            await MainActor.run {
-                saveTokens(access: response.access, refresh: response.refresh)
-                self.currentUser = response.user
-            }
-        } catch {
-            // For demo: create mock user on error and continue
-            print("Registration failed, using mock session: \(error.localizedDescription)")
-            await MainActor.run {
-                // Set mock tokens for demo
-                saveTokens(access: "demo_token", refresh: "demo_refresh")
-                self.currentUser = User(id: 999, email: email, username: email.components(separatedBy: "@").first)
-            }
+        let response = try await NetworkManager.shared.register(email: email, password: password, confirmPassword: confirmPassword)
+        
+        await MainActor.run {
+            saveTokens(access: response.access, refresh: response.refresh)
+            self.currentUser = response.user
         }
     }
     
@@ -80,6 +60,28 @@ class AuthManager: ObservableObject {
         let user = try await NetworkManager.shared.getCurrentUser()
         await MainActor.run {
             self.currentUser = user
+        }
+    }
+    
+    func requestOTP(email: String) async throws {
+        try await NetworkManager.shared.requestOTP(email: email)
+    }
+    
+    func verifyOTP(email: String, otp: String) async throws {
+        let response = try await NetworkManager.shared.verifyOTP(email: email, otp: otp)
+        
+        await MainActor.run {
+            saveTokens(access: response.access, refresh: response.refresh)
+            self.currentUser = response.user
+        }
+    }
+    
+    func googleAuth(token: String) async throws {
+        let response = try await NetworkManager.shared.googleAuth(token: token)
+        
+        await MainActor.run {
+            saveTokens(access: response.access, refresh: response.refresh)
+            self.currentUser = response.user
         }
     }
     

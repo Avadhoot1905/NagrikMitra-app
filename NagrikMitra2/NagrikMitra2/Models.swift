@@ -12,68 +12,75 @@ struct User: Codable, Identifiable {
     let id: Int
     let email: String
     let username: String?
+    let firstName: String?
+    let lastName: String?
+    let isEmailVerified: Bool?
+    let authMethod: String?
+    let googleId: String?
+    let profilePicture: String?
+    let dateJoined: String?
+}
+
+struct AuthTokens: Codable {
+    let access: String
+    let refresh: String
 }
 
 struct LoginResponse: Codable {
-    let access: String
-    let refresh: String
+    let message: String?
     let user: User
+    let tokens: AuthTokens
+    
+    // Convenience computed properties for backward compatibility
+    var access: String { tokens.access }
+    var refresh: String { tokens.refresh }
 }
 
 // MARK: - Report
 struct Report: Codable, Identifiable {
     let id: Int
+    let user: Int?
     let issueTitle: String
     let location: String
     let issueDescription: String?
     let imageUrl: String?
+    let completionUrl: String?
+    let issueDate: String?
     let status: String
-    let createdAt: String
     let updatedAt: String
     let trackingId: String?
+    let department: String?
+    let confidenceScore: Double?
+    let allocatedTo: String?
     
-    enum CodingKeys: String, CodingKey {
-        case id
-        case issueTitle = "issue_title"
-        case location
-        case issueDescription = "issue_description"
-        case imageUrl = "image_url"
-        case status
-        case createdAt = "created_at"
-        case updatedAt = "updated_at"
-        case trackingId = "tracking_id"
-    }
+    // Backward compatibility
+    var createdAt: String { issueDate ?? updatedAt }
 }
 
 // MARK: - Profile
 struct UserProfile: Codable {
     let id: Int
-    let user: User
     let isAadhaarVerified: Bool
     let aadhaar: AadhaarData?
-    
-    enum CodingKeys: String, CodingKey {
-        case id, user, aadhaar
-        case isAadhaarVerified = "is_aadhaar_verified"
-    }
+    let createdAt: String?
+    let updatedAt: String?
 }
 
 struct AadhaarData: Codable {
+    let aadhaarNumber: String?
+    let fullName: String?
     let firstName: String?
-    let midName: String?
+    let middleName: String?
     let lastName: String?
     let dateOfBirth: String?
-    let phone: String?
     let address: String?
+    let gender: String?
+    let phoneNumber: String?
+    let createdAt: String?
     
-    enum CodingKeys: String, CodingKey {
-        case firstName = "first_name"
-        case midName = "mid_name"
-        case lastName = "last_name"
-        case dateOfBirth = "date_of_birth"
-        case phone
-        case address
-    }
+    // Backward compatibility
+    var midName: String? { middleName }
+    var phone: String? { phoneNumber }
 }
 
 // MARK: - Stats
@@ -83,3 +90,83 @@ struct AppStats {
     let avgResolution: String
     let successRate: String
 }
+
+// MARK: - ML Prediction
+struct MLPredictionResponse: Codable {
+    let department: String
+    let confidence: Double
+    let isValid: Bool
+    let method: String?
+    let reason: String?
+    let imageResult: MLResult?
+    let textResult: MLTextResult?
+}
+
+struct MLResult: Codable {
+    let department: String
+    let confidence: Double
+}
+
+struct MLTextResult: Codable {
+    let department: String
+    let confidence: Double
+    let intent: String?
+}
+
+// MARK: - Aadhaar Verification
+struct AadhaarVerificationResponse: Codable {
+    let verified: Bool
+    let aadhaarNumber: String?
+    let error: String?
+    let aadhaar: AadhaarData?
+    let profile: UserProfile?
+}
+
+// MARK: - S3 Upload
+struct S3PresignResponse: Codable {
+    let url: String
+    let key: String
+}
+
+struct S3PresignRequest: Codable {
+    let fileName: String
+    let contentType: String
+}
+
+// MARK: - Blockchain
+struct BlockchainStatusResponse: Codable {
+    let trackingId: String
+    let blockchainVerified: Bool
+    let slaEscalated: Bool
+    let latestTxHash: String?
+    let events: [BlockchainEvent]?
+    let evidence: [BlockchainEvidence]?
+    let slaStatus: SLAStatus?
+}
+
+struct BlockchainEvent: Codable {
+    let eventType: String
+    let txHash: String?
+    let blockNumber: Int?
+    let timestamp: String?
+    let status: String?
+    let explorerUrl: String?
+}
+
+struct BlockchainEvidence: Codable {
+    let fileName: String
+    let filePath: String
+    let fileUrl: String
+    let fileHash: String
+    let txHash: String?
+    let verified: Bool
+    let blockTimestamp: Int?
+    let createdAt: String
+}
+
+struct SLAStatus: Codable {
+    let withinSla: Bool
+    let daysElapsed: Int
+    let daysRemaining: Int
+}
+

@@ -19,6 +19,19 @@ struct LoginView: View {
     @State private var errorMessage: String?
     @State private var showError = false
     
+    // OTP Login
+    @State private var showOTPLogin = false
+    @State private var otpCode = ""
+    @State private var otpSent = false
+    
+    // Auth method
+    @State private var authMethod: AuthMethod = .emailPassword
+    
+    enum AuthMethod {
+        case emailPassword
+        case otp
+    }
+    
     var body: some View {
         ZStack {
             // Background gradient
@@ -68,7 +81,70 @@ struct LoginView: View {
                             )
                         }
                         
-                        Button(action: handleAuth) {
+                        // Auth method toggle
+                        if isLogin {
+                            Button(action: { withAnimation { authMethod = authMethod == .emailPassword ? .otp : .emailPassword } }) {
+                                Text(authMethod == .emailPassword ? "Login with OTP instead" : "Login with password instead")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.9))
+                            }
+                        }
+                        
+                        // OTP Section
+                        if isLogin && authMethod == .otp {
+                            if !otpSent {
+                                Button(action: requestOTP) {
+                                    HStack {
+                                        if isLoading {
+                                            ProgressView()
+                                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                        } else {
+                                            Image(systemName: "envelope.badge")
+                                            Text("Send OTP")
+                                                .fontWeight(.semibold)
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(Theme.Colors.emerald600)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(12)
+                                }
+                                .disabled(isLoading || email.isEmpty)
+                                .opacity((isLoading || email.isEmpty) ? 0.6 : 1.0)
+                            } else {
+                                FormField(
+                                    icon: "number",
+                                    placeholder: "Enter OTP",
+                                    text: $otpCode,
+                                    keyboardType: .numberPad
+                                )
+                                
+                                Button(action: verifyOTP) {
+                                    HStack {
+                                        if isLoading {
+                                            ProgressView()
+                                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                        } else {
+                                            Image(systemName: "checkmark.shield")
+                                            Text("Verify OTP")
+                                                .fontWeight(.semibold)
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(Theme.Colors.emerald600)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(12)
+                                }
+                                .disabled(isLoading || otpCode.isEmpty)
+                                .opacity((isLoading || otpCode.isEmpty) ? 0.6 : 1.0)
+                            }
+                        }
+                        
+                        // Regular login/register button
+                        if authMethod == .emailPassword {
+                            Button(action: handleAuth) {
                             HStack {
                                 if isLoading {
                                     ProgressView()
@@ -87,7 +163,39 @@ struct LoginView: View {
                         .disabled(isLoading || !isFormValid)
                         .opacity((isLoading || !isFormValid) ? 0.6 : 1.0)
                         
-                        Button(action: { withAnimation { isLogin.toggle() } }) {
+                        }
+                        
+                        // Divider
+                        HStack {
+                            Rectangle()
+                                .fill(Color.white.opacity(0.3))
+                                .frame(height: 1)
+                            Text("OR")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.8))
+                            Rectangle()
+                                .fill(Color.white.opacity(0.3))
+                                .frame(height: 1)
+                        }
+                        .padding(.vertical, 8)
+                        
+                        // Google OAuth Button
+                        Button(action: handleGoogleAuth) {
+                            HStack {
+                                Image(systemName: "g.circle.fill")
+                                Text(isLogin ? "Continue with Google" : "Sign up with Google")
+                                    .fontWeight(.semibold)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.white)
+                            .foregroundColor(Theme.Colors.gray900)
+                            .cornerRadius(12)
+                        }
+                        .disabled(isLoading)
+                        .opacity(isLoading ? 0.6 : 1.0)
+                        
+                        Button(action: { withAnimation { isLogin.toggle(); authMethod = .emailPassword; otpSent = false } }) {
                             HStack {
                                 Text(isLogin ? "Don't have an account?" : "Already have an account?")
                                     .foregroundColor(.white.opacity(0.8))
@@ -128,16 +236,66 @@ struct LoginView: View {
                 } else {
                     try await authManager.register(email: email, password: password, confirmPassword: confirmPassword)
                 }
+                
+                await MainActor.run {
+                    dismiss()
+                }
             } catch {
-                // For demo: silently continue even on error
-                print("Registration error (continuing): \(error.localizedDescription)")
-            }
-            
-            // Always proceed to next page
-            await MainActor.run {
-                dismiss()
+                await MainActor.run {
+                    isLoading = false
+                    errorMessage = error.localizedDescription
+                    showError = true
+                }
             }
         }
+    }
+    
+    private func requestOTP() {
+        isLoading = true
+        errorMessage = nil
+        
+        Task {
+            do {
+                try await authManager.requestOTP(email: email)
+                await MainActor.run {
+                    otpSent = true
+                    isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    isLoading = false
+                    errorMessage = error.localizedDescription
+                    showError = true
+                }
+            }
+        }
+    }
+    
+    private func verifyOTP() {
+        isLoading = true
+        errorMessage = nil
+        
+        Task {
+            do {
+                try await authManager.verifyOTP(email: email, otp: otpCode)
+                await MainActor.run {
+                    dismiss()
+                }
+            } catch {
+                await MainActor.run {
+                    isLoading = false
+                    errorMessage = error.localizedDescription
+                    showError = true
+                }
+            }
+        }
+    }
+    
+    private func handleGoogleAuth() {
+        // Note: This requires Google Sign-In SDK integration
+        // For now, showing placeholder
+        errorMessage = "Google Sign-In requires additional SDK setup. Please use email/password or OTP login."
+        showError = true
     }
 }
 

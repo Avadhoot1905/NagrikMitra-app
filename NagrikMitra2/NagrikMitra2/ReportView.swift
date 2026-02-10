@@ -9,6 +9,9 @@ import SwiftUI
 import PhotosUI
 
 struct ReportView: View {
+    @StateObject private var locationManager = LocationManager()
+    @EnvironmentObject var authManager: AuthManager
+    
     @State private var title = ""
     @State private var location = ""
     @State private var description = ""
@@ -19,6 +22,7 @@ struct ReportView: View {
     @State private var showError = false
     @State private var errorMessage = ""
     @State private var trackingId: String?
+    @State private var isDetectingLocation = false
     
     var body: some View {
         NavigationView {
@@ -57,8 +61,34 @@ struct ReportView: View {
                                 .font(.subheadline.bold())
                                 .foregroundColor(Theme.Colors.gray700)
                             
-                            TextField("e.g., Main Street, near Park", text: $location)
-                                .textFieldStyle(CustomTextFieldStyle())
+                            HStack(spacing: 8) {
+                                TextField("e.g., Main Street, near Park", text: $location)
+                                    .textFieldStyle(CustomTextFieldStyle())
+                                
+                                Button(action: detectLocation) {
+                                    HStack {
+                                        if isDetectingLocation {
+                                            ProgressView()
+                                                .progressViewStyle(CircularProgressViewStyle(tint: Theme.Colors.emerald600))
+                                        } else {
+                                            Image(systemName: "location.circle.fill")
+                                                .font(.title3)
+                                        }
+                                    }
+                                    .foregroundColor(Theme.Colors.emerald600)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 12)
+                                    .background(Theme.Colors.emerald50)
+                                    .cornerRadius(12)
+                                }
+                                .disabled(isDetectingLocation)
+                            }
+                            
+                            if let locationError = locationManager.errorMessage {
+                                Text(locationError)
+                                    .font(.caption)
+                                    .foregroundColor(Theme.Colors.error)
+                            }
                         }
                         
                         VStack(alignment: .leading, spacing: 8) {
@@ -155,11 +185,28 @@ struct ReportView: View {
             } message: {
                 Text(errorMessage)
             }
+            .onAppear {
+                // Request location permission on appear
+                if locationManager.authorizationStatus == .notDetermined {
+                    locationManager.requestPermission()
+                }
+            }
+            .onChange(of: locationManager.locationString) {
+                if !locationManager.locationString.isEmpty {
+                    location = locationManager.locationString
+                    isDetectingLocation = false
+                }
+            }
         }
     }
     
     private var isFormValid: Bool {
         !title.isEmpty && !location.isEmpty && !description.isEmpty
+    }
+    
+    private func detectLocation() {
+        isDetectingLocation = true
+        locationManager.getCurrentLocation()
     }
     
     private func submitReport() {

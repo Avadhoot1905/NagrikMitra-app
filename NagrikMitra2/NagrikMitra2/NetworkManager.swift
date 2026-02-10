@@ -105,53 +105,29 @@ class NetworkManager {
     // MARK: - Image Upload
     func uploadImage(_ imageData: Data) async throws -> String {
         // Get presigned URL
-        struct PresignResponse: Codable {
-            let url: String
-            let fields: [String: String]
-            let fileUrl: String
-            
-            enum CodingKeys: String, CodingKey {
-                case url
-                case fields
-                case fileUrl = "file_url"
-            }
-        }
+        let requestBody = S3PresignRequest(
+            fileName: "image-\(UUID().uuidString).jpg",
+            contentType: "image/jpeg"
+        )
         
-        let presignResponse: PresignResponse = try await request(
+        let body = try JSONEncoder().encode(requestBody)
+        
+        let presignResponse: S3PresignResponse = try await request(
             endpoint: APIConfig.Endpoints.presignS3,
             method: "POST",
+            body: body,
             authenticated: true
         )
         
-        // Upload to S3
+        // Upload directly to S3 using the presigned URL
         guard let url = URL(string: presignResponse.url) else {
             throw NetworkError.invalidURL
         }
         
         var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        
-        let boundary = UUID().uuidString
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        
-        var body = Data()
-        
-        // Add fields
-        for (key, value) in presignResponse.fields {
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".data(using: .utf8)!)
-            body.append("\(value)\r\n".data(using: .utf8)!)
-        }
-        
-        // Add file
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"image.jpg\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
-        body.append(imageData)
-        body.append("\r\n".data(using: .utf8)!)
-        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
-        
-        request.httpBody = body
+        request.httpMethod = "PUT"
+        request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
+        request.httpBody = imageData
         
         let (_, response) = try await URLSession.shared.data(for: request)
         
@@ -160,7 +136,8 @@ class NetworkManager {
             throw NetworkError.serverError("Failed to upload image")
         }
         
-        return presignResponse.fileUrl
+        // Return the key/path that was generated
+        return presignResponse.key
     }
 }
 
@@ -201,6 +178,53 @@ extension NetworkManager {
         )
     }
     
+    func requestOTP(email: String) async throws {
+        struct OTPResponse: Codable {
+            let message: String
+            let expiresIn: String?
+            
+            enum CodingKeys: String, CodingKey {
+                case message
+                case expiresIn = "expires_in"
+            }
+        }
+        
+        let body = try JSONEncoder().encode([
+            "email": email
+        ])
+        
+        let _: OTPResponse = try await request(
+            endpoint: APIConfig.Endpoints.requestOTP,
+            method: "POST",
+            body: body
+        )
+    }
+    
+    func verifyOTP(email: String, otp: String) async throws -> LoginResponse {
+        let body = try JSONEncoder().encode([
+            "email": email,
+            "otp": otp
+        ])
+        
+        return try await request(
+            endpoint: APIConfig.Endpoints.verifyOTP,
+            method: "POST",
+            body: body
+        )
+    }
+    
+    func googleAuth(token: String) async throws -> LoginResponse {
+        let body = try JSONEncoder().encode([
+            "token": token
+        ])
+        
+        return try await request(
+            endpoint: "/users/google-auth/",
+            method: "POST",
+            body: body
+        )
+    }
+    
     // MARK: - Reports
     func submitReport(title: String, location: String, description: String, imageUrl: String?) async throws -> Report {
         struct ReportSubmission: Encodable {
@@ -208,12 +232,16 @@ extension NetworkManager {
             let location: String
             let issueDescription: String
             let imageUrl: String?
+            let department: String?
+            let confidenceScore: Double?
             
             enum CodingKeys: String, CodingKey {
                 case issueTitle = "issue_title"
                 case location
                 case issueDescription = "issue_description"
                 case imageUrl = "image_url"
+                case department
+                case confidenceScore = "confidence_score"
             }
         }
         
@@ -221,7 +249,9 @@ extension NetworkManager {
             issueTitle: title,
             location: location,
             issueDescription: description,
-            imageUrl: imageUrl
+            imageUrl: imageUrl,
+            department: nil,
+            confidenceScore: nil
         )
         
         let body = try JSONEncoder().encode(submission)
@@ -277,15 +307,10 @@ extension NetworkManager {
     }
     
     func getUserHistory() async throws -> [Report] {
-        struct HistoryResponse: Decodable {
-            let results: [Report]
-        }
-        
-        let response: HistoryResponse = try await request(
+        return try await request(
             endpoint: APIConfig.Endpoints.userHistory,
             authenticated: true
         )
-        return response.results
     }
     
     // MARK: - Profile
@@ -308,18 +333,49 @@ extension NetworkManager {
             authenticated: true
         )
     }
+    
+    // MARK: - ML Prediction
+    func predictDepartment(imageBase64: String, title: String, description: String) async throws -> MLPredictionResponse {
+        struct PredictionRequest: Encodable {
+            let imageBase64: String
+            let title: String
+            let description: String
+            
+            enum CodingKeys: String, CodingKey {
+                case imageBase64 = "image_base64"
+                case title
+                case description
+            }
+        }
+        
+        let request = PredictionRequest(
+            imageBase64: imageBase64,
+            title: title,
+            description: description
+        )
+        
+        let body = try JSONEncoder().encode(request)
+        
+        return try await self.request(
+            endpoint: "/ml/predict/",
+            method: "POST",
+            body: body,
+            authenticated: true
+        )
+    }
+    
+    // MARK: - Blockchain
+    func getBlockchainStatus(trackingId: String) async throws -> BlockchainStatusResponse {
+        return try await request(
+            endpoint: "/blockchain/reports/\(trackingId)/status/",
+            authenticated: true
+        )
+    }
 }
 
 // MARK: - Response Models
 struct CommunityResponse: Codable {
-    let count: Int
     let next: String?
     let previous: String?
     let results: [Report]
-}
-
-struct AadhaarVerificationResponse: Codable {
-    let success: Bool
-    let message: String
-    let data: AadhaarData?
 }

@@ -16,6 +16,12 @@ struct ProfileView: View {
     @State private var showError = false
     @State private var errorMessage = ""
     
+    // Aadhaar Verification
+    @State private var showAadhaarVerification = false
+    @State private var aadhaarNumber = ""
+    @State private var isVerifyingAadhaar = false
+    @State private var isAadhaarVerifiedInSheet = false
+    
     var body: some View {
         NavigationView {
             ScrollView {
@@ -54,11 +60,92 @@ struct ProfileView: View {
                             .padding(.vertical, 8)
                             .background(Theme.Colors.emerald50)
                             .cornerRadius(20)
+                            
+                            // Aadhaar Verification Button
+                            if !profile.isAadhaarVerified {
+                                Button(action: { showAadhaarVerification = true }) {
+                                    HStack {
+                                        Image(systemName: "person.badge.shield.checkmark")
+                                        Text("Verify Aadhaar")
+                                            .fontWeight(.semibold)
+                                    }
+                                    .font(.subheadline)
+                                    .foregroundColor(Theme.Colors.emerald600)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                                    .background(Theme.Colors.emerald50)
+                                    .cornerRadius(20)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 20)
+                                            .stroke(Theme.Colors.emerald600, lineWidth: 1)
+                                    )
+                                }
+                            } else if let aadhaar = profile.aadhaar {
+                                // Show Aadhaar Info
+                                VStack(spacing: 4) {
+                                    if let fullName = aadhaar.fullName {
+                                        Text(fullName)
+                                            .font(.subheadline.bold())
+                                            .foregroundColor(Theme.Colors.gray900)
+                                    }
+                                    if let phone = aadhaar.phoneNumber {
+                                        Text(phone)
+                                            .font(.caption)
+                                            .foregroundColor(Theme.Colors.gray600)
+                                    }
+                                }
+                                .padding(.top, 4)
+                            }
                         }
                     }
                     .padding()
                     .frame(maxWidth: .infinity)
                     .background(Theme.Colors.surface)
+                    
+                    // Aadhaar Verification Section
+                    // Show if profile hasn't loaded yet OR if loaded and not verified
+                    if profile == nil || (profile?.isAadhaarVerified == false) {
+                        VStack(spacing: 16) {
+                            HStack(spacing: 12) {
+                                Image(systemName: "shield.lefthalf.filled.badge.checkmark")
+                                    .font(.title)
+                                    .foregroundColor(.orange)
+                                
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Complete Your Profile")
+                                        .font(.headline)
+                                        .foregroundColor(Theme.Colors.gray900)
+                                    
+                                    Text("Verify your Aadhaar to enhance your profile and gain verified citizen status")
+                                        .font(.subheadline)
+                                        .foregroundColor(Theme.Colors.gray600)
+                                }
+                                
+                                Spacer()
+                            }
+                            
+                            Button(action: { showAadhaarVerification = true }) {
+                                HStack {
+                                    Image(systemName: "person.badge.shield.checkmark")
+                                    Text("Verify Aadhaar Now")
+                                        .fontWeight(.semibold)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(Theme.Colors.emerald600)
+                                .foregroundColor(.white)
+                                .cornerRadius(12)
+                            }
+                        }
+                        .padding()
+                        .background(Color.orange.opacity(0.1))
+                        .cornerRadius(16)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16)
+                                .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+                        )
+                        .padding(.horizontal)
+                    }
                     
                     // Stats
                     LazyVGrid(columns: [
@@ -136,6 +223,14 @@ struct ProfileView: View {
             } message: {
                 Text(errorMessage)
             }
+            .sheet(isPresented: $showAadhaarVerification) {
+                AadhaarVerificationSheet(
+                    aadhaarNumber: $aadhaarNumber,
+                    isVerifying: $isVerifyingAadhaar,
+                    isVerified: $isAadhaarVerifiedInSheet,
+                    onVerify: verifyAadhaar
+                )
+            }
         }
     }
     
@@ -146,6 +241,41 @@ struct ProfileView: View {
             return String(email.prefix(2).uppercased())
         }
         return "U"
+    }
+    
+    private func verifyAadhaar() {
+        isVerifyingAadhaar = true
+        
+        Task {
+            do {
+                let response = try await NetworkManager.shared.verifyAadhaar(aadhaarNumber: aadhaarNumber)
+                
+                await MainActor.run {
+                    if response.verified {
+                        isAadhaarVerifiedInSheet = true
+                        // Keep the sheet open for 2 seconds to show verified state
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                            showAadhaarVerification = false
+                            isAadhaarVerifiedInSheet = false
+                            // Reload profile
+                            Task {
+                                await loadData()
+                            }
+                        }
+                    } else {
+                        errorMessage = response.error ?? "Aadhaar verification failed"
+                        showError = true
+                    }
+                    isVerifyingAadhaar = false
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    showError = true
+                    isVerifyingAadhaar = false
+                }
+            }
+        }
     }
     
     private var resolvedCount: Int {
@@ -259,6 +389,102 @@ struct ReportHistoryCard: View {
         outputFormatter.dateStyle = .medium
         
         return outputFormatter.string(from: date)
+    }
+}
+
+struct AadhaarVerificationSheet: View {
+    @Binding var aadhaarNumber: String
+    @Binding var isVerifying: Bool
+    @Binding var isVerified: Bool
+    let onVerify: () -> Void
+    @Environment(\.dismiss) var dismiss
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 24) {
+                VStack(spacing: 16) {
+                    Image(systemName: isVerified ? "checkmark.seal.fill" : "person.badge.shield.checkmark.fill")
+                        .font(.system(size: 60))
+                        .foregroundColor(isVerified ? .green : Theme.Colors.emerald600)
+                    
+                    Text(isVerified ? "Aadhaar Verified!" : "Verify Your Aadhaar")
+                        .font(.title2.bold())
+                        .foregroundColor(Theme.Colors.gray900)
+                    
+                    Text(isVerified ? "Your Aadhaar has been successfully verified" : "Link your Aadhaar to submit reports and access verified citizen features")
+                        .font(.subheadline)
+                        .foregroundColor(Theme.Colors.gray600)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                }
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Aadhaar Number", systemImage: "creditcard")
+                        .font(.subheadline.bold())
+                        .foregroundColor(isVerified ? .green : Theme.Colors.gray700)
+                    
+                    HStack {
+                        TextField("Enter 12-digit Aadhaar", text: $aadhaarNumber)
+                            .keyboardType(.numberPad)
+                            .textFieldStyle(CustomTextFieldStyle())
+                            .disabled(isVerified)
+                            .onChange(of: aadhaarNumber) {
+                                // Limit to 12 digits
+                                if aadhaarNumber.count > 12 {
+                                    aadhaarNumber = String(aadhaarNumber.prefix(12))
+                                }
+                            }
+                        
+                        if isVerified {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                                .font(.title2)
+                        }
+                    }
+                    .opacity(isVerified ? 0.7 : 1.0)
+                    
+                    Text(isVerified ? "This Aadhaar number has been verified and linked to your account" : "Your Aadhaar information is securely encrypted and only used for verification")
+                        .font(.caption)
+                        .foregroundColor(isVerified ? .green : Theme.Colors.gray500)
+                }
+                .padding(.horizontal)
+                
+                Button(action: onVerify) {
+                    HStack {
+                        if isVerifying {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        } else if isVerified {
+                            Image(systemName: "checkmark.circle.fill")
+                            Text("Verified")
+                                .fontWeight(.semibold)
+                        } else {
+                            Image(systemName: "checkmark.shield")
+                            Text("Verify Aadhaar")
+                                .fontWeight(.semibold)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(isVerified ? Color.green : (aadhaarNumber.count == 12 ? Theme.Colors.emerald600 : Theme.Colors.gray300))
+                    .foregroundColor(.white)
+                    .cornerRadius(12)
+                }
+                .disabled(aadhaarNumber.count != 12 || isVerifying || isVerified)
+                .padding(.horizontal)
+                
+                Spacer()
+            }
+            .padding(.top, 32)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
+        }
     }
 }
 
