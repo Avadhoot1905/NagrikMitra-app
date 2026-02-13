@@ -6,15 +6,25 @@
 //
 
 import SwiftUI
+import GoogleSignIn
 
 @main
 struct NagrikMitra2App: App {
     @StateObject private var authManager = AuthManager()
     
+    init() {
+        // Configure Google Sign-In on app launch
+        GoogleSignInManager.shared.configure()
+    }
+    
     var body: some Scene {
         WindowGroup {
             MainTabView()
                 .environmentObject(authManager)
+                .onOpenURL { url in
+                    // Handle Google Sign-In callback URL
+                    _ = GoogleSignInManager.shared.handleURL(url)
+                }
         }
     }
 }

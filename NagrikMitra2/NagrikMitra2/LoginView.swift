@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import GoogleSignIn
 
 struct LoginView: View {
     @EnvironmentObject var authManager: AuthManager
@@ -292,10 +293,35 @@ struct LoginView: View {
     }
     
     private func handleGoogleAuth() {
-        // Note: This requires Google Sign-In SDK integration
-        // For now, showing placeholder
-        errorMessage = "Google Sign-In requires additional SDK setup. Please use email/password or OTP login."
-        showError = true
+        isLoading = true
+        errorMessage = nil
+        
+        Task {
+            do {
+                // Get ID token from Google Sign-In
+                let idToken = try await GoogleSignInManager.shared.signIn()
+                
+                // Send token to backend
+                try await authManager.googleAuth(token: idToken)
+                
+                await MainActor.run {
+                    isLoading = false
+                    dismiss()
+                }
+            } catch let error as GoogleSignInError {
+                await MainActor.run {
+                    isLoading = false
+                    errorMessage = error.errorDescription ?? "Google Sign-In failed"
+                    showError = true
+                }
+            } catch {
+                await MainActor.run {
+                    isLoading = false
+                    errorMessage = error.localizedDescription
+                    showError = true
+                }
+            }
+        }
     }
 }
 
